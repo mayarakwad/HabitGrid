@@ -85,13 +85,17 @@ const Auth = (() => {
     return users()[id || Store.read('session', '')] || null;
   }
 
-  // Checks a password, counting failures: five in a row lock the profile for 30 seconds.
+  // Every password check goes through here: five wrong in a row lock the profile for 30
+  // seconds, wherever they were typed, and a right one starts the count again.
   async function checkAttempt(u, password) {
     if (u.lockUntil && Date.now() < u.lockUntil) {
       throw new Error(`Too many attempts. Try again in ${Math.ceil((u.lockUntil - Date.now()) / 1000)}s.`);
     }
-    if (await derive(password, u.salt) === u.hash) return;
     const all = users(), rec = all[u.id];
+    if (await derive(String(password || ''), u.salt) === u.hash) {
+      if (rec.fails || rec.lockUntil) { rec.fails = 0; rec.lockUntil = 0; saveUsers(all); }
+      return;
+    }
     rec.fails = (rec.fails || 0) + 1;
     if (rec.fails >= 5) { rec.fails = 0; rec.lockUntil = Date.now() + 30000; }
     saveUsers(all);
@@ -115,7 +119,10 @@ const Auth = (() => {
     let u = byGoogle(identity.sub);
     if (!u) {
       const sameEmail = byLogin(identity.email);
-      if (sameEmail && !hasPassword(sameEmail)) throw new Error('That email belongs to a profile connected to a different Google account.');
+      // Linking never replaces a Google account a profile already has.
+      if (sameEmail && (!hasPassword(sameEmail) || sameEmail.google)) {
+        throw new Error('The profile with that email is connected to a different Google account.');
+      }
       if (sameEmail) return { link: sameEmail };
       u = create({ email: norm(identity.email), displayName: String(identity.name || '').slice(0, 30) || identity.email.split('@')[0],
         google: { sub: identity.sub, email: norm(identity.email) }, ...newProfile });
@@ -130,6 +137,7 @@ const Auth = (() => {
     const u = users()[id];
     if (!u) throw new Error('That profile no longer exists.');
     if (byGoogle(identity.sub)) throw new Error('That Google account is already connected to another profile.');
+    if (u.google) throw new Error('That profile is already connected to a different Google account.');
     await checkAttempt(u, password);
     update(id, { google: { sub: identity.sub, email: norm(identity.email) } });
     startSession(id, remember);
@@ -153,19 +161,27 @@ const Auth = (() => {
     await checkAttempt(u, password);
   }
 
-  function disconnectGoogle(id) {
-    if (!hasPassword(users()[id])) throw new Error('Set a password first, or you could no longer sign in.');
+  async function disconnectGoogle(id, password) {
+    const u = users()[id];
+    if (!hasPassword(u)) throw new Error('Set a password first, or you could no longer sign in.');
+    await checkAttempt(u, password);
     const all = users();
     delete all[id].google;
     saveUsers(all);
     return all[id];
   }
 
-  // Re-confirming who you are: a password, or for Google-only profiles the same Google account.
-  async function verify(id, password) {
+  // Changing the email needs the password (when the profile has one): an email decides which
+  // profile a Google sign-in offers to connect to.
+  async function setEmail(id, email, password) {
     const u = users()[id];
-    return hasPassword(u) && await derive(password, u.salt) === u.hash;
+    const e = checkEmail(email, id);
+    if (e === u.email) return u;
+    if (hasPassword(u)) await checkAttempt(u, password);
+    return update(id, { email: e });
   }
+
+  // Re-confirming who you are with Google, for profiles without a password.
   const verifyGoogle = (id, identity) => { const u = users()[id]; return !!(u && u.google && identity && u.google.sub === identity.sub); };
 
   async function setPassword(id, password) {
@@ -175,8 +191,12 @@ const Auth = (() => {
   }
 
   async function changePassword(id, oldPw, newPw) {
-    if (!(await verify(id, oldPw))) throw new Error('Current password is wrong.');
     checkPassword(newPw);
+    try {
+      await confirmPassword(id, oldPw);
+    } catch (err) {
+      throw new Error(err.message === 'Wrong password.' ? 'Current password is wrong.' : err.message);
+    }
     await setPassword(id, newPw);
   }
 
@@ -196,7 +216,7 @@ const Auth = (() => {
   }
 
   async function newRecoveryCode(id, password) {
-    if (!(await verify(id, password))) throw new Error('Wrong password.');
+    await confirmPassword(id, password);
     return storeRecoveryCode(id);
   }
 
@@ -232,6 +252,6 @@ const Auth = (() => {
   }
 
   return { list, byLogin, label, hasPassword, checkEmail, register, startSession, current, login, logout,
-    googleSignIn, linkGoogle, connectGoogle, confirmPassword, disconnectGoogle, verify, verifyGoogle, changePassword, addPassword,
+    googleSignIn, linkGoogle, connectGoogle, confirmPassword, disconnectGoogle, setEmail, verifyGoogle, changePassword, addPassword,
     newRecoveryCode, resetWithCode, update, remove };
 })();

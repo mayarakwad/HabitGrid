@@ -140,7 +140,12 @@ class SignIn:
             if params["error"] == "access_denied":
                 raise Cancelled("Google sign-in was cancelled.")
             raise GoogleSignInError(f"Google sign-in failed ({params['error']}).")
-        token = self._exchange(params["code"], verifier, redirect_uri)
+        try:
+            token = self._exchange(params["code"], verifier, redirect_uri)
+        except GoogleSignInError:
+            if self._cancelled:  # the exchange failed after the person cancelled: just cancelled
+                raise Cancelled("Google sign-in was cancelled.") from None
+            raise
         if self._cancelled:  # cancelled while the code was being exchanged
             raise Cancelled("Google sign-in was cancelled.")
         return identity_from_id_token(token.get("id_token", ""), self.client["client_id"])
@@ -158,10 +163,12 @@ class SignIn:
                 if params.get("state") != state or not (params.get("code") or params.get("error")):
                     self.send_error(404)
                     return
+                # Nothing is checked yet at this point (that happens after this page is sent),
+                # so the page doesn't claim success: HabitGrid itself says how it went.
                 ok = bool(params.get("code"))
                 body = DONE_PAGE.format(
-                    title="You're signed in" if ok else "Sign-in didn't finish",
-                    text="You can close this tab and go back to HabitGrid." if ok else "Go back to HabitGrid to try again.",
+                    title="Back to HabitGrid" if ok else "Sign-in didn't finish",
+                    text="You can close this tab. HabitGrid finishes signing you in." if ok else "Go back to HabitGrid to try again.",
                 ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

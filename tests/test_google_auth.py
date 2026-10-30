@@ -121,7 +121,9 @@ class SignInTest(unittest.TestCase):
         self.assertEqual((p["response_type"], p["scope"], p["code_challenge_method"]), ("code", "openid email profile", "S256"))
         self.assertEqual((seen["wrong_state"], seen["favicon"]), (404, 404))
         self.assertEqual(seen["done"][0], 200)
-        self.assertIn("go back to HabitGrid", seen["done"][1])
+        # Sent before anything is checked, so it must not claim the sign-in worked.
+        self.assertIn("HabitGrid finishes signing you in", seen["done"][1])
+        self.assertNotIn("signed in<", seen["done"][1])
         # The token request proves we hold the verifier behind the challenge we sent.
         sent = self.token_requests[0]
         self.assertEqual(sent["code"], "the-code")
@@ -179,6 +181,18 @@ class SignInTest(unittest.TestCase):
             dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["redirect_uri"] + "?" + urllib.parse.urlencode(
                 {"code": "c", "state": dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["state"]}),)).start() or True,
             urlopen=slow_urlopen, timeout=10)
+        with self.assertRaises(Cancelled):
+            signin.run()
+
+    def test_exchange_failing_after_cancel_counts_as_cancelled(self):
+        signin = None
+
+        def failing_urlopen(request, timeout=None, context=None):
+            signin.cancel()
+            raise urllib.error.URLError("network went away")
+
+        signin = self.make(lambda p: visit(p["redirect_uri"] + "?" + urllib.parse.urlencode({"code": "c", "state": p["state"]})))
+        signin._urlopen = failing_urlopen
         with self.assertRaises(Cancelled):
             signin.run()
 

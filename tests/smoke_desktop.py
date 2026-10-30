@@ -58,7 +58,16 @@ window.__smoke = null;
     await Auth.linkGoogle(user.id, 'smoke-pass-1', smokeGoogle);
     r.linkedSignIn = Auth.googleSignIn(smokeGoogle, {}).user.id === user.id;
     r.connectTaken = await fails(() => Auth.connectGoogle(user.id, gia, 'smoke-pass-1'), 'already connected');
-    r.disconnect = !Auth.disconnectGoogle(user.id).google && !!Auth.googleSignIn(smokeGoogle, {}).link;
+    // Another Google account with the same email can't replace the one already connected.
+    r.linkKeepsExistingGoogle = await fails(() => Auth.googleSignIn({ sub: 'g-3', email: 'smoke@example.com', name: 'X' }, {}), 'different Google account')
+      && Auth.byLogin('smoke@example.com').google.sub === 'g-2';
+    r.disconnectNeedsPassword = await fails(() => Auth.disconnectGoogle(user.id, 'nope'), 'Wrong password');
+    r.disconnect = !(await Auth.disconnectGoogle(user.id, 'smoke-pass-1')).google && !!Auth.googleSignIn(smokeGoogle, {}).link;
+    r.rightPasswordResetsCount = (Auth.byLogin('smoke@example.com').fails || 0) === 0;
+    // Changing the email needs the password.
+    r.emailNeedsPassword = await fails(() => Auth.setEmail(user.id, 'smoke2@example.com', 'nope'), 'Wrong password');
+    r.emailChanges = (await Auth.setEmail(user.id, 'smoke2@example.com', 'smoke-pass-1')).email === 'smoke2@example.com'
+      && (await Auth.setEmail(user.id, 'smoke@example.com', 'smoke-pass-1')).email === 'smoke@example.com';
     // Connecting Google from the profile page needs the profile's password.
     r.connectNeedsPassword = await fails(() => Auth.connectGoogle(user.id, smokeGoogle, 'nope'), 'Wrong password')
       && !Auth.byLogin('smoke@example.com').google;
@@ -71,8 +80,33 @@ window.__smoke = null;
     const old = await Auth.register({ email: 'legacy@example.com', displayName: 'Old Timer', password: 'legacy-pass-1' });
     Auth.update(old.user.id, { email: undefined, username: 'oldtimer' });
     r.legacyLogin = (await Auth.login('OldTimer', 'legacy-pass-1', false)).id === old.user.id && Auth.label(Auth.byLogin('oldtimer')) === 'oldtimer';
+    // ...and can still save Edit profile without adding an email.
+    const submitProfile = async (fields) => {
+      ACTIONS.editProfile();
+      const form = document.querySelector('[data-form="profile"]');
+      for (const [name, value] of Object.entries(fields)) {
+        form.elements[name].value = value;
+        form.elements[name].dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      form.requestSubmit();
+      await new Promise(res => setTimeout(res, 600));
+      const err = document.querySelector('[data-form="profile"] .form-err');
+      return err ? err.textContent || 'still open' : '';
+    };
+    enterApp(Auth.byLogin('oldtimer'));
+    r.legacyEditSaved = await submitProfile({ bio: 'Still here' }) === '' && Auth.byLogin('oldtimer').bio === 'Still here' && !Auth.byLogin('oldtimer').email;
+    // A password profile: saving without touching the email works; a new email needs the password.
+    enterApp(Auth.byLogin('smoke@example.com'));
+    r.editSavesWithoutPassword = await submitProfile({ bio: 'Daily' }) === '' && Auth.byLogin('smoke@example.com').bio === 'Daily';
+    r.newEmailAsksPassword = (await submitProfile({ email: 'other@example.com', password: 'nope' })).includes('Wrong password')
+      && !!Auth.byLogin('smoke@example.com');
+    closeModal(true);
+
+    // A Google-only profile left for the second run's screens.
+    Auth.googleSignIn({ sub: 'g-4', email: 'solo@gmail.com', name: 'Solo' }, { avatar: '🐙', color: '#7c5cff' });
 
     Auth.startSession(user.id, true); // leave Smoke signed in for the second run
+    enterApp(Auth.current()); // and its theme as the window's look
     await Store.flush();
     r.ok = true;
     window.__smoke = JSON.stringify(r);
@@ -94,9 +128,12 @@ window.__smoke = null;
   r.profileShowsEmail = document.querySelector('.pc-info').textContent.includes('smoke@example.com');
   ACTIONS.logout();
   r.pickTiles = document.querySelectorAll('.profile-tile:not(.add)').length;
-  r.pickOffersGoogle = !!document.querySelector('.auth-links [data-action="googleSignIn"]');
+  r.pickOffersGoogle = document.querySelector('.auth-links [data-m="login"]').textContent.includes('Google');
   AuthUI.pick = 'gia@gmail.com'; AuthUI.mode = 'login'; renderAuth();
   r.googleOnlyGetsPasswordForm = !!document.querySelector('[data-form="login"]'); // Gia added a password
+  AuthUI.pick = 'solo@gmail.com'; AuthUI.mode = 'login'; renderAuth();
+  r.googleOnlyHasKeepSignedIn = !!document.querySelector('.auth-card input[name="remember"]') && !!document.querySelector('.btn.google')
+    && !document.querySelector('[data-form="login"]');
   AuthUI.pick = null; AuthUI.mode = 'login'; renderAuth();
   r.loginHasGoogleAndEmail = !!document.querySelector('.btn.google') && !!document.querySelector('input[name="login"]');
   r.ok = true;
@@ -155,7 +192,7 @@ def drive(window, script, screenshot):
             time.sleep(0.25)
         if screenshot and sys.platform == "win32":
             time.sleep(1.5)  # let the entrance animations finish
-            capture(screenshot)
+            capture(screenshot)  # works off-screen; no window.on_top (it can deadlock from this thread)
     except Exception as e:  # report instead of hanging the window open
         result = {"ok": False, "error": repr(e)}
     finally:
@@ -203,7 +240,7 @@ def main():
 
         data = json.loads((folder / "data.json").read_text("utf-8"))
         users = {(u.get("email") or u.get("username")): u for u in data.get("hg.users", {}).values()}
-        if sorted(users) != ["gia@gmail.com", "oldtimer", "smoke@example.com"]:
+        if sorted(users) != ["gia@gmail.com", "oldtimer", "smoke@example.com", "solo@gmail.com"]:
             failures.append(f"data.json profiles: {sorted(users)}")
         else:
             if any(p in json.dumps(data) for p in ("smoke-pass-1", "gia-pass-123", "legacy-pass-1")):
@@ -222,8 +259,8 @@ def main():
         print("second run:", second)
         expected = {"ok": True, "backend": "desktop", "user": "smoke@example.com", "label": "smoke@example.com",
                     "habits": 5, "done": 1, "theme": "forest", "booted": True, "google": True,
-                    "profileOffersConnectGoogle": True, "profileShowsEmail": True, "pickTiles": 3, "pickOffersGoogle": True,
-                    "googleOnlyGetsPasswordForm": True, "loginHasGoogleAndEmail": True}
+                    "profileOffersConnectGoogle": True, "profileShowsEmail": True, "pickTiles": 4, "pickOffersGoogle": True,
+                    "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

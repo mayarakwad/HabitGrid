@@ -185,9 +185,11 @@ function openModal(html, { wide = false } = {}) {
 function closeModal(immediate) {
   const root = $('#modal-root');
   if (App.confirm) { const r = App.confirm; App.confirm = null; r(false); }
-  if (App.googleBusy) { // the "Continue in your browser" dialog was dismissed
-    App.googleCancelled = true;
+  if (App.googleWait) { // the "Continue in your browser" dialog was dismissed
+    const wait = App.googleWait;
+    App.googleWait = null;
     Store.api.google_cancel();
+    wait.cancel();
   }
   if (root.hidden) return;
   const seq = ++App.modalSeq;
@@ -275,8 +277,7 @@ const AUTH_VIEWS = {
       <span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><b>${esc(u.displayName)}</b><small>${esc(Auth.label(u))}</small></button>`).join('')}
       <button class="profile-tile add" style="--i:${accounts.length}" data-action="authMode" data-m="register">
       <span class="avatar lg">${I.plus}</span><b>New profile</b><small>Create account</small></button></div>
-    <div class="auth-links"><button class="link-btn" data-action="authMode" data-m="login">Sign in with email</button>
-      ${googleOn() ? '<button class="link-btn" data-action="googleSignIn">Continue with Google</button>' : ''}</div>`,
+    <div class="auth-links"><button class="link-btn" data-action="authMode" data-m="login">${googleOn() ? 'Sign in with email or Google' : 'Sign in with email'}</button></div>`,
 
   login: accounts => {
     const u = AuthUI.pick && Auth.byLogin(AuthUI.pick);
@@ -285,7 +286,8 @@ const AUTH_VIEWS = {
       : '<button type="button" class="link-btn" data-action="authMode" data-m="register">Create an account</button>';
     if (u && !Auth.hasPassword(u)) {
       return `${who(u, `Hi, ${esc(u.displayName)}`)}<p class="auth-sub">This profile signs in with Google.</p>
-        ${googleOn() ? googleBtn('Continue with Google') : `<p class="form-err">Google sign-in isn't available in this copy of HabitGrid.</p>`}
+        ${googleOn() ? `<label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>${googleBtn('Continue with Google')}`
+          : `<p class="form-err">Google sign-in isn't available in this copy of HabitGrid.</p>`}
         <div class="auth-links">${back}</div>`;
     }
     return `<form data-form="login">
@@ -904,8 +906,9 @@ const ACTIONS = {
     renderAuth();
   },
   async googleSignIn(el) {
-    // The "Keep me signed in" box of the form this button sits in; screens without one keep you signed in.
-    const box = el.closest('form') && el.closest('form').elements.remember;
+    // The "Keep me signed in" box on the same screen (every sign-in screen with a Google button has one).
+    const screen = el.closest('form') || el.closest('.auth-card');
+    const box = screen && screen.querySelector('input[name="remember"]');
     const remember = box ? box.checked : true;
     const identity = await googleIdentity();
     if (!identity) return;
@@ -929,12 +932,13 @@ const ACTIONS = {
       <p class="form-err" role="alert"></p>
       <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">Continue with Google</button></div></form>`);
   },
-  async disconnectGoogle() {
+  disconnectGoogle() {
     if (!Auth.hasPassword(App.user)) return toast('Set a password first, or you could no longer sign in.');
-    if (!(await confirmBox('Disconnect Google?', 'You will sign in with your email and password only.', 'Disconnect'))) return;
-    App.user = Auth.disconnectGoogle(App.user.id);
-    renderView(false);
-    toast('Google disconnected');
+    openModal(`<form data-form="disconnectGoogle"><div class="modal-head"><h2>Disconnect Google?</h2>${closeBtn}</div>
+      <p class="muted">You will sign in with your email and password only. Enter your password to confirm.</p><br>
+      ${pwField('password', 'Password', 'current-password', 'autofocus')}
+      <p class="form-err" role="alert"></p>
+      <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn danger solid">Disconnect</button></div></form>`);
   },
   async deleteWithGoogle() {
     const identity = await googleIdentity();
@@ -1021,7 +1025,9 @@ const ACTIONS = {
     const u = App.user;
     openModal(`<form data-form="profile"><div class="modal-head"><h2>Edit profile</h2>${closeBtn}</div>
       <label class="field"><span>Display name</span><input class="input" name="displayName" maxlength="30" required value="${esc(u.displayName)}" autofocus></label>
-      <label class="field"><span>Email</span><input class="input" name="email" type="email" maxlength="254" required autocomplete="email" value="${esc(u.email || '')}" placeholder="you@example.com"></label>
+      <label class="field"><span>Email</span><input class="input" name="email" type="email" maxlength="254" ${u.email ? 'required' : ''} autocomplete="email"
+        value="${esc(u.email || '')}" data-orig="${esc(u.email || '')}" placeholder="${u.email ? 'you@example.com' : 'Optional: add an email to sign in with it'}"></label>
+      ${Auth.hasPassword(u) ? `<div class="email-pw" hidden>${pwField('password', 'Password (to change your email)', 'current-password', 'disabled')}</div>` : ''}
       <label class="field"><span>Bio</span><input class="input" name="bio" maxlength="80" value="${esc(u.bio || '')}" placeholder="A short motto or goal"></label>
       <div class="field"><span>Avatar</span>${avatarPicker(u.avatar)}</div>
       <div class="field"><span>Profile color</span>${colorRadios('color', u.color)}</div>
@@ -1140,11 +1146,13 @@ const FORMS = {
     checkBadges();
     toast(id ? 'Habit updated' : `${icon} ${name} added`);
   },
-  profile(f, fd) {
+  async profile(f, fd) {
     const displayName = String(fd.get('displayName') || '').trim().slice(0, 30);
     if (!displayName) throw new Error('Display name is required.');
-    const email = Auth.checkEmail(fd.get('email'), App.user.id);
-    App.user = Auth.update(App.user.id, { displayName, email, bio: String(fd.get('bio') || '').trim().slice(0, 80),
+    // A profile from before emails may leave it empty; changing an email needs the password.
+    const email = String(fd.get('email') || '').trim();
+    if (email || App.user.email) await Auth.setEmail(App.user.id, email, fd.get('password'));
+    App.user = Auth.update(App.user.id, { displayName, bio: String(fd.get('bio') || '').trim().slice(0, 80),
       avatar: pickAvatar(fd.get('avatar')), color: pickColor(fd.get('color')) });
     closeModal();
     updateMe();
@@ -1161,8 +1169,14 @@ const FORMS = {
     showRecoveryCode(await Auth.newRecoveryCode(App.user.id, fd.get('password')), 'Your new recovery code');
   },
   async deleteAccount(f, fd) {
-    if (!(await Auth.verify(App.user.id, fd.get('password')))) throw new Error('Wrong password.');
+    await Auth.confirmPassword(App.user.id, fd.get('password'));
     deleteCurrentAccount();
+  },
+  async disconnectGoogle(f, fd) {
+    App.user = await Auth.disconnectGoogle(App.user.id, fd.get('password'));
+    closeModal();
+    renderView(false);
+    toast('Google disconnected');
   },
 };
 
@@ -1190,22 +1204,33 @@ async function googleIdentity() {
     toast("Google sign-in isn't available in this copy of HabitGrid");
     return null;
   }
-  if (App.googleBusy) return null;
+  if (App.googleWait) return null;
   openModal(`<div class="modal-head"><h2>Continue in your browser</h2></div>
     <p class="muted">Google's sign-in page opened in your web browser. Choose your account there, then come back to HabitGrid.</p>
     <div class="waiting"><span class="spinner"></span>Waiting for Google…</div>
     <div class="modal-foot"><span class="grow"></span><button class="btn ghost" data-action="closeModal">Cancel</button></div>`);
-  App.googleBusy = true; // after openModal: closing this dialog now cancels the sign-in (see closeModal)
-  App.googleCancelled = false;
+  // Set after openModal: from now on closing this dialog cancels (see closeModal). Cancelling
+  // ends the wait at once; whatever Google answers later for this attempt is ignored.
+  const wait = App.googleWait = {};
+  const cancelled = new Promise(resolve => { wait.cancel = resolve; });
+  const call = Store.api.google_sign_in();
+  call.catch(() => {}); // a late failure after a cancel is expected, not an error
+  let error = null;
   try {
-    const identity = await Store.api.google_sign_in();
-    return App.googleCancelled ? null : identity; // cancelled after the browser part: still cancelled
+    const result = await Promise.race([call.then(identity => ({ identity })), cancelled.then(() => ({ cancelled: true }))]);
+    return result.cancelled ? null : result.identity;
   } catch (err) {
-    if (err && err.name !== 'Cancelled') toast(String((err && err.message) || err));
+    if (!(err && err.name === 'Cancelled')) error = String((err && err.message) || err);
     return null;
   } finally {
-    App.googleBusy = false;
-    closeModal(true);
+    if (App.googleWait === wait) { // still this attempt's dialog
+      App.googleWait = null;
+      closeModal(true);
+      if (error) {
+        openModal(`<div class="modal-head"><h2>Google sign-in didn't finish</h2>${closeBtn}</div><p class="muted">${esc(error)}</p>
+          <div class="modal-foot"><span class="grow"></span><button class="btn primary" data-action="closeModal" autofocus>OK</button></div>`);
+      }
+    }
   }
 }
 
@@ -1235,6 +1260,13 @@ document.addEventListener('input', e => {
   if (t.matches('[data-strength]')) updateStrength(t);
   if (t.matches('input[type="color"][data-setting]')) applyLook({ ...settings(), accent: t.value });
   if (t.matches('.emo-custom')) for (const b of $$('.emo', t.form)) b.setAttribute('aria-pressed', b.dataset.v === t.value.trim());
+  if (t.matches('[data-form="profile"] input[name="email"]')) { // the password is needed only for a new email
+    const box = $('.email-pw', t.form);
+    if (box) {
+      // Disabled while hidden: a hidden required field would silently block saving.
+      box.hidden = $('input', box).disabled = t.value.trim().toLowerCase() === t.dataset.orig;
+    }
+  }
 });
 
 document.addEventListener('change', e => {

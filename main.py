@@ -124,6 +124,18 @@ def _focus_window(hwnd):
     user32.SetForegroundWindow(hwnd)
 
 
+def _raise_window(hwnd):
+    """Puts a window above the others without activating it: topmost for a moment, then not."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32")
+    user32.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT)
+    flags = 0x0001 | 0x0002 | 0x0010  # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+    user32.SetWindowPos(hwnd, wintypes.HWND(-1), 0, 0, 0, 0, flags)  # HWND_TOPMOST
+    user32.SetWindowPos(hwnd, wintypes.HWND(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
+
+
 def _find_app_window():
     """The visible HabitGrid window (pywebview's WinForms form), or None.
 
@@ -174,28 +186,32 @@ class Api:
             self._signin.cancel()  # a new attempt replaces an abandoned one
         signin = self._signin = google_auth.SignIn(self._google_client)
         try:
-            identity = signin.run()
+            return signin.run()
         finally:
             if self._signin is signin:
                 self._signin = None
-        self._bring_to_front()
-        return identity
+            self._bring_to_front()  # also after a failure, so its message isn't hidden behind the browser
 
     def google_cancel(self):
         if self._signin:
             self._signin.cancel()
 
     def _bring_to_front(self):
-        # After the browser, put HabitGrid back in front. Not window.restore(): in pywebview
-        # that also un-maximizes. Windows may refuse the focus change (the browser is in
-        # front), so briefly making the window topmost raises it either way.
+        """After the browser, puts HabitGrid back in front. Runs on a pywebview call thread."""
         try:
             if sys.platform == "win32":
+                # Plain Win32 calls through ctypes, not pywebview: on Windows its window.on_top
+                # sets the form's TopMost from this thread while holding Python's lock, which can
+                # deadlock with the window's own thread. Its window.restore() also un-maximizes.
                 hwnd = _find_app_window()
                 if hwnd:
                     _focus_window(hwnd)
-            self._window.on_top = True
-            self._window.on_top = False
+                    _raise_window(hwnd)  # in case Windows refused the focus change
+            else:
+                # On macOS both go through the main thread; restore() only un-minimizes.
+                self._window.restore()
+                self._window.on_top = True
+                self._window.on_top = False
         except Exception:
             pass
 

@@ -55,14 +55,48 @@ class MainTest(unittest.TestCase):
             api = create.call_args.kwargs["js_api"]
             self.assertTrue(api.info()["google"])
 
-    def test_coming_back_from_google_keeps_a_maximized_window(self):
-        # pywebview's window.restore() also un-maximizes, so it must not be used.
+    def test_coming_back_from_google_on_windows_uses_win32_only(self):
+        # pywebview's restore() un-maximizes, and its on_top setter can deadlock from a call thread.
+        class Window:
+            def __init__(self):
+                self.calls = []
+
+            def restore(self):
+                self.calls.append("restore")
+
+            @property
+            def on_top(self):
+                return False
+
+            @on_top.setter
+            def on_top(self, value):
+                self.calls.append(f"on_top={value}")
+
         api = main.Api(DataFile("."))
-        api._window = mock.Mock()
-        with mock.patch.object(main, "_find_app_window", return_value=None):
+        api._window = Window()
+        with mock.patch.object(main.sys, "platform", "win32"), mock.patch.object(main, "_find_app_window", return_value=42), \
+                mock.patch.object(main, "_focus_window") as focus, mock.patch.object(main, "_raise_window") as raise_:
             api._bring_to_front()
-        api._window.restore.assert_not_called()
-        self.assertFalse(api._window.on_top)  # raised for a moment, then put back
+        focus.assert_called_once_with(42)
+        raise_.assert_called_once_with(42)
+        self.assertEqual(api._window.calls, [])
+        with mock.patch.object(main.sys, "platform", "darwin"):
+            api._bring_to_front()
+        self.assertEqual(api._window.calls, ["restore", "on_top=True", "on_top=False"])
+
+    def test_google_failure_still_brings_the_app_forward(self):
+        class FailingSignIn:
+            def __init__(self, client):
+                pass
+
+            def run(self):
+                raise google_auth.GoogleSignInError("This Google account has no verified email address.")
+
+        api = main.Api(DataFile("."), {"client_id": "x", "client_secret": "y"})
+        with mock.patch.object(google_auth, "SignIn", FailingSignIn), mock.patch.object(api, "_bring_to_front") as front:
+            with self.assertRaises(google_auth.GoogleSignInError):
+                api.google_sign_in()
+        front.assert_called_once()
 
     def test_api_exposes_no_private_state(self):
         # pywebview shares every public attribute of the Api with the page.
