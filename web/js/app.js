@@ -118,8 +118,6 @@ function applyLook(s) {
   for (const k of ['font', 'size', 'density', 'radius', 'cb', 'motion']) root.dataset[k] = s[k];
   root.style.setProperty('--accent', s.accent);
   root.style.setProperty('--on-accent', onColor(s.accent));
-  const meta = $('meta[name="theme-color"]');
-  if (meta) meta.content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#191919';
 }
 function applySettings() {
   const s = settings();
@@ -330,7 +328,7 @@ function renderAuth() {
   const mode = AuthUI.mode || (accounts.length ? 'pick' : 'register');
   $('#app').innerHTML = `<main class="auth">
     <div class="auth-card${mode === 'register' ? ' wide' : ''}"><div class="auth-brand">${LOGO}<span>HabitGrid</span></div>${AUTH_VIEWS[mode](accounts)}</div>
-    <p class="auth-foot">${I.lock} Profiles are stored only on this device. Passwords are salted and hashed (PBKDF2) and never leave your browser.</p>
+    <p class="auth-foot">${I.lock} Profiles are stored only on this computer. Passwords are salted and hashed (PBKDF2), and nothing is sent anywhere.</p>
   </main>`;
   const f = $('.auth [autofocus]');
   if (f) f.focus();
@@ -704,13 +702,22 @@ function animateCounts(root) {
   requestAnimationFrame(step);
 }
 
-function exportData() {
+async function exportData() {
   const u = App.user;
   const payload = { app: 'HabitGrid', version: 1, exported: new Date().toISOString(),
     profile: { username: u.username, displayName: u.displayName, avatar: u.avatar, color: u.color, bio: u.bio }, data: App.data };
+  const name = `habitgrid-${u.username}-${Dates.key(new Date())}.json`, text = JSON.stringify(payload);
+  if (Store.backend === 'desktop') {
+    try {
+      if (await Store.api.export_backup(name, text)) toast('Backup saved');
+    } catch (err) {
+      toast('Could not save the backup');
+    }
+    return;
+  }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: 'application/json' }));
-  a.download = `habitgrid-${u.username}-${Dates.key(new Date())}.json`;
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   toast('Backup downloaded');
@@ -731,10 +738,21 @@ function sanitizeData(d) {
   return { v: 1, habits, log, settings: cleanSettings(d.settings), badges };
 }
 
+async function importBackup() {
+  if (Store.backend !== 'desktop') return $('#import-file').click(); // continues in importFile
+  let text;
+  try { text = await Store.api.import_backup(); } catch (err) { return toast(String(err && err.message || err)); }
+  if (text != null) await importText(text);
+}
+
 async function importFile(file) {
   if (file.size > 2e6) return toast('That file is too large to be a HabitGrid backup');
+  await importText(await file.text());
+}
+
+async function importText(text) {
   let json;
-  try { json = JSON.parse(await file.text()); } catch { return toast("That file isn't valid JSON"); }
+  try { json = JSON.parse(text); } catch { return toast("That file isn't valid JSON"); }
   const d = json && (json.data || json);
   if (!d || !Array.isArray(d.habits) || typeof d.log !== 'object') return toast("That doesn't look like a HabitGrid backup");
   const ok = await confirmBox('Replace your data?', `This replaces your ${App.data.habits.length} habit(s) and their history with ${d.habits.length} habit(s) from the backup.`, 'Replace');
@@ -752,9 +770,10 @@ const setRow = (label, hint, control) => `<div class="set-row"><div><b>${label}<
 
 function storageHTML() {
   const used = Store.bytesUsed(), mine = Store.size('data.' + App.user.id), cap = 5 * 1048576;
+  const where = Store.backend === 'desktop' ? `Saved in <code>${esc(Store.info.dataFile)}</code>, with the previous version kept as a backup.` : 'Saved in this browser.';
   return `<div class="meter"><i style="width:${Math.max(0.5, (used / cap) * 100).toFixed(2)}%"></i></div>
-    <p class="muted">Your data: <b>${fmtBytes(mine)}</b> · All profiles on this device: <b>${fmtBytes(used)}</b> of about 5 MB browser storage.
-    Check-ins are packed into bitmasks, and the whole app is about 120 KB (around 32 KB compressed) with no libraries, fonts or images.</p>`;
+    <p class="muted">Your data: <b>${fmtBytes(mine)}</b> · All profiles: <b>${fmtBytes(used)}</b> of the 5 MB limit.
+    Check-ins are packed into bitmasks, so years of history stay tiny.</p><p class="muted">${where}</p>`;
 }
 
 function viewSettings() {
@@ -782,7 +801,8 @@ function viewSettings() {
     </section>
     <section class="card"><h2>Storage</h2><div id="storage">${storageHTML()}</div>
       <div class="row-btns"><button class="btn sm" data-action="cleanup">${I.broom} Clean up</button><button class="btn sm" data-action="exportData">${I.download} Export backup</button></div></section>
-    <div class="row-btns center"><button class="btn ghost" data-action="resetLook">Reset personalization</button></div>`;
+    <div class="row-btns center"><button class="btn ghost" data-action="resetLook">Reset personalization</button></div>
+    ${Store.info.version ? `<p class="muted center version">HabitGrid ${esc(Store.info.version)}</p>` : ''}`;
 }
 
 function syncControls() {
@@ -942,7 +962,7 @@ const ACTIONS = {
       <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">Create code</button></div></form>`);
   },
   exportData,
-  importData() { $('#import-file').click(); },
+  importData() { importBackup(); },
   deleteAccount() {
     openModal(`<form data-form="deleteAccount"><div class="modal-head"><h2>Delete account?</h2>${closeBtn}</div>
       <p class="muted">This permanently removes <b>@${esc(App.user.username)}</b>, its habits and history from this device. Export a backup first if you might want it back.</p><br>
@@ -1081,10 +1101,25 @@ document.addEventListener('keydown', e => {
 });
 
 /* ---------- boot ---------- */
-(function boot() {
+(async function boot() {
+  try {
+    await Store.init();
+  } catch (err) {
+    // Without the app's storage nothing could be saved, so don't let anyone start.
+    $('#app').innerHTML = `<main class="auth"><div class="auth-card"><div class="auth-brand">${LOGO}<span>HabitGrid</span></div>
+      <h1>HabitGrid couldn't open its data</h1><p class="auth-sub">${esc(err.message || err)} Close HabitGrid and open it again.</p></div></main>`;
+    document.documentElement.classList.remove('booting');
+    return;
+  }
+  let lastSaveError = 0;
+  Store.onError = () => {
+    if (Date.now() - lastSaveError < 5000) return; // one message per burst of failed saves
+    lastSaveError = Date.now();
+    toast("Couldn't save your changes. Check that HabitGrid's data folder is writable.");
+  };
   const u = Auth.current();
   if (u) enterApp(u); else renderAuth();
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
-  }
+  // Not requestAnimationFrame: that never runs while the window is hidden or minimized.
+  void document.body.offsetWidth; // apply the hidden state first, so removing it fades in
+  document.documentElement.classList.remove('booting');
 })();

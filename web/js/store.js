@@ -1,27 +1,70 @@
 'use strict';
 /* Storage, dates and habit statistics.
-   Everything lives in localStorage under the "hg." prefix. Check-ins are stored as one
-   31-bit mask per habit per month, so a full year of 10 habits is only a few KB. */
+   Keys use the "hg." prefix. Check-ins are stored as one 31-bit mask per habit per month,
+   so a full year of 10 habits is only a few KB. */
 
+/* In the desktop app (opened as index.html?app=desktop) the data lives in a file the app
+   keeps (see storage.py). This holds an in-memory copy, read synchronously, and sends a full
+   snapshot to the app after every change. Opened in a plain browser, for development, it
+   uses localStorage instead. */
 const Store = (() => {
   const P = 'hg.';
+  const utf8 = new TextEncoder();
+  let backend = 'browser', api = null, info = {}, cache = null;
+  let seq = Date.now(); // keeps rising across page reloads, so the app can drop stale saves
+  const saving = new Set();
+
+  async function init() {
+    if (new URLSearchParams(location.search).get('app') !== 'desktop') return backend;
+    api = await new Promise((resolve, reject) => {
+      const ready = () => window.pywebview && window.pywebview.api && typeof window.pywebview.api.load === 'function';
+      if (ready()) return resolve(window.pywebview.api);
+      window.addEventListener('pywebviewready', () => (ready() ? resolve(window.pywebview.api) : reject(new Error('The app has no storage.'))), { once: true });
+      setTimeout(() => reject(new Error('The app did not respond.')), 20000);
+    });
+    const data = await api.load();
+    cache = {};
+    for (const [k, v] of Object.entries(data || {})) cache[k] = JSON.stringify(v);
+    info = await api.info();
+    backend = 'desktop';
+    return backend;
+  }
+
+  // Cached values are JSON strings, so the snapshot is built without re-encoding them.
+  const snapshot = () => '{' + Object.entries(cache).map(([k, v]) => JSON.stringify(k) + ':' + v).join(',') + '}';
+
+  function persist() {
+    const p = api.save(++seq, snapshot())
+      .catch(err => { console.error('Could not save', err); if (Store.onError) Store.onError(err); })
+      .finally(() => saving.delete(p));
+    saving.add(p);
+  }
+
   function read(key, fallback) {
     try {
-      const raw = localStorage.getItem(P + key);
+      const raw = cache ? cache[P + key] : localStorage.getItem(P + key);
       return raw == null ? fallback : JSON.parse(raw);
     } catch { return fallback; }
   }
+  // In the desktop app a failed save is reported later, through Store.onError.
   function write(key, value) {
-    try { localStorage.setItem(P + key, JSON.stringify(value)); return true; }
+    const raw = JSON.stringify(value);
+    if (cache) { cache[P + key] = raw; persist(); return true; }
+    try { localStorage.setItem(P + key, raw); return true; }
     catch (err) { console.error('Could not save', key, err); return false; }
   }
-  function remove(key) { try { localStorage.removeItem(P + key); } catch { /* ignore */ } }
-  // localStorage keeps UTF-16 strings, so each character costs two bytes.
+  function remove(key) {
+    if (cache) { delete cache[P + key]; persist(); return; }
+    try { localStorage.removeItem(P + key); } catch { /* ignore */ }
+  }
+  // The data file is UTF-8; localStorage keeps UTF-16, two bytes per character.
   function size(key) {
+    if (cache) return cache[P + key] == null ? 0 : utf8.encode(JSON.stringify(P + key) + cache[P + key]).length + 2;
     try { const v = localStorage.getItem(P + key); return v == null ? 0 : (P.length + key.length + v.length) * 2; }
     catch { return 0; }
   }
   function bytesUsed() {
+    if (cache) return utf8.encode(snapshot()).length;
     let n = 0;
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -31,7 +74,14 @@ const Store = (() => {
     } catch { /* ignore */ }
     return n;
   }
-  return { read, write, remove, size, bytesUsed };
+  const flush = () => Promise.all([...saving]);
+
+  return {
+    init, read, write, remove, size, bytesUsed, flush, onError: null,
+    get backend() { return backend; },
+    get api() { return api; },
+    get info() { return info; },
+  };
 })();
 
 const Dates = {
