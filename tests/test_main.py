@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import google_auth
 import main
 from storage import DataFile
 
@@ -35,6 +36,33 @@ class MainTest(unittest.TestCase):
             self.assertEqual(api.info()["version"], main.VERSION)
             self.assertTrue(api.save(1, '{"a": 1}'))
             self.assertEqual(api.load(), {"a": 1})
+
+    def test_google_sign_in_off_without_a_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            api = main.Api(DataFile(tmp))
+            self.assertFalse(api.info()["google"])
+            with self.assertRaisesRegex(google_auth.GoogleSignInError, "isn't set up"):
+                api.google_sign_in()
+            api.google_cancel()  # nothing to cancel: no error
+
+    def test_google_client_file_turns_it_on(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HABITGRID_GOOGLE_CLIENT_ID", None)
+            client_file = Path(tmp) / "google_client.json"
+            client_file.write_text('{"installed": {"client_id": "id.apps.googleusercontent.com", "client_secret": "s"}}')
+            with mock.patch.object(main, "GOOGLE_CLIENT_FILE", client_file), mock.patch.object(main.webview, "create_window") as create:
+                main.create_main_window(Path(tmp) / "data")
+            api = create.call_args.kwargs["js_api"]
+            self.assertTrue(api.info()["google"])
+
+    def test_coming_back_from_google_keeps_a_maximized_window(self):
+        # pywebview's window.restore() also un-maximizes, so it must not be used.
+        api = main.Api(DataFile("."))
+        api._window = mock.Mock()
+        with mock.patch.object(main, "_find_app_window", return_value=None):
+            api._bring_to_front()
+        api._window.restore.assert_not_called()
+        self.assertFalse(api._window.on_top)  # raised for a moment, then put back
 
     def test_api_exposes_no_private_state(self):
         # pywebview shares every public attribute of the Api with the page.

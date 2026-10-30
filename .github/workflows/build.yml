@@ -1,8 +1,11 @@
-# Builds HabitGrid for Windows (HabitGrid.exe) and macOS (HabitGrid.app) on GitHub-hosted
-# machines, runs the tests there, and checks each built app opens its window.
-# Download the builds from the run's Artifacts.
-# Pushing a version tag (git tag v1.0.0 && git push origin v1.0.0) also publishes both
-# as a public GitHub Release.
+# Builds HabitGrid for Windows (HabitGrid-Setup.exe and HabitGrid.exe) and macOS (HabitGrid.dmg
+# and HabitGrid-mac.zip) on GitHub-hosted machines, runs the tests there, checks each built app
+# opens, and on Windows installs and uninstalls the setup wizard. Download the builds from the
+# run's Artifacts.
+# Pushing a version tag (git tag v1.1.0 && git push origin v1.1.0) also publishes them as a
+# public GitHub Release.
+# Google sign-in is built in when the repository has a GOOGLE_CLIENT_JSON secret (the JSON file
+# of a Google Cloud "Desktop app" OAuth client; see the README).
 name: Build
 
 on:
@@ -29,7 +32,20 @@ jobs:
           .venv\Scripts\python -m pip install -r requirements.txt
           .venv\Scripts\python -m unittest -v
 
-      - name: Build HabitGrid.exe
+      - name: Add the Google sign-in client
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+        run: |
+          if ($env:GOOGLE_CLIENT_JSON) { Set-Content google_client.json $env:GOOGLE_CLIENT_JSON -Encoding utf8; 'Google sign-in: on' }
+          else { 'Google sign-in: off (no GOOGLE_CLIENT_JSON secret)' }
+
+      - name: Get Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build HabitGrid.exe and HabitGrid-Setup.exe
         shell: cmd
         run: build.bat
 
@@ -37,7 +53,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HabitGrid-windows
-          path: dist/HabitGrid.exe
+          path: |
+            dist/HabitGrid.exe
+            dist/HabitGrid-Setup.exe
           if-no-files-found: error
 
       - name: Check the built app opens its window
@@ -55,6 +73,37 @@ jobs:
           Write-Host 'HabitGrid window is open'
           taskkill /PID $p.Id /T /F | Out-Null
 
+      - name: Install, open and uninstall with the setup wizard
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'HabitGrid install'
+          $setup = Start-Process dist\HabitGrid-Setup.exe -Wait -PassThru `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`""
+          if ($setup.ExitCode -ne 0) { Write-Error "Setup failed (code $($setup.ExitCode))"; exit 1 }
+          $exe = Join-Path $dir 'HabitGrid.exe'
+          $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'HabitGrid.lnk'
+          foreach ($f in $exe, $menu) { if (-not (Test-Path $f)) { Write-Error "Setup didn't create $f"; exit 1 } }
+          Write-Host 'Installed, with a Start menu shortcut'
+
+          $env:HABITGRID_DATA_DIR = Join-Path $env:RUNNER_TEMP 'habitgrid-data-installed'
+          $p = Start-Process $exe -PassThru
+          $deadline = (Get-Date).AddSeconds(45)
+          while (-not (Get-Process HabitGrid -ErrorAction SilentlyContinue | Where-Object MainWindowTitle -eq 'HabitGrid')) {
+            if ($p.HasExited -or (Get-Date) -gt $deadline) { Write-Error 'The installed HabitGrid did not open its window'; exit 1 }
+            Start-Sleep -Milliseconds 500
+          }
+          Write-Host 'The installed app opens'
+          taskkill /PID $p.Id /T /F | Out-Null
+          Start-Sleep -Seconds 2
+
+          Start-Process (Join-Path $dir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path $exe) -or (Test-Path $menu)) {  # the uninstaller finishes in a copy of itself
+            if ((Get-Date) -gt $deadline) { Write-Error 'Uninstall left HabitGrid behind'; exit 1 }
+            Start-Sleep -Seconds 1
+          }
+          Write-Host 'Uninstalled cleanly'
+
   macos:
     runs-on: macos-latest
     steps:
@@ -70,14 +119,26 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt
           .venv/bin/python -m unittest -v
 
+      - name: Add the Google sign-in client
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_JSON" ]; then printf '%s' "$GOOGLE_CLIENT_JSON" > google_client.json; echo "Google sign-in: on"
+          else echo "Google sign-in: off (no GOOGLE_CLIENT_JSON secret)"; fi
+
       - name: Build HabitGrid.app
         run: bash build_mac.sh
+
+      - name: Check the disk image
+        run: hdiutil verify dist/HabitGrid.dmg
 
       - name: Upload the app
         uses: actions/upload-artifact@v4
         with:
           name: HabitGrid-mac
-          path: dist/HabitGrid-mac.zip
+          path: |
+            dist/HabitGrid.dmg
+            dist/HabitGrid-mac.zip
           if-no-files-found: error
 
       - name: Check the built app starts
@@ -112,17 +173,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          HabitGrid is a small habit tracker for your computer: a monthly checkbox grid, charts, a Today view, profiles and themes. Your data stays on your computer.
+          HabitGrid is a small habit tracker for your computer: a monthly checkbox grid, charts, a Today view, profiles and themes. Sign in with your email and password, or with Google. Your habits stay on your computer.
 
           ### Windows
-          Download **HabitGrid.exe** and double-click it. Nothing to install.
+          Download **HabitGrid-Setup.exe** and run it: it installs HabitGrid with Start menu and Desktop shortcuts and an uninstaller (Settings > Apps). No administrator rights needed.
+          Prefer no install? **HabitGrid.exe** runs as is.
 
           The app isn't code-signed yet, so Windows may say "Windows protected your PC": click **More info**, then **Run anyway**. If Smart App Control blocks it completely, run HabitGrid from the source instead (see "Smart App Control" in the README).
 
-          Your data is saved in `%APPDATA%\HabitGrid\data.json`.
+          Your data is saved in `%APPDATA%\HabitGrid\data.json` and stays there if you uninstall.
 
           ### macOS (Apple Silicon, M1 or later)
-          Not yet tested by a person on a real Mac; please report what happens. Install and open it from Terminal:
+          Not yet tested by a person on a real Mac; please report what happens.
+          Open **HabitGrid.dmg** and drag HabitGrid to Applications. Because the app isn't notarized yet, macOS will refuse to open it the first time: go to System Settings > Privacy & Security and click **Open Anyway**. Or install it from Terminal, which skips that step:
 
           ```
           mkdir -p ~/Applications && curl -fL -o /tmp/HabitGrid-mac.zip https://github.com/mayarakwad/HabitGrid/releases/latest/download/HabitGrid-mac.zip && ditto -x -k /tmp/HabitGrid-mac.zip ~/Applications && open ~/Applications/HabitGrid.app
@@ -130,5 +193,5 @@ jobs:
 
           Your data is saved in `~/Library/Application Support/HabitGrid/data.json`.
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/HabitGrid.exe dist/HabitGrid-mac.zip \
+          gh release create "$GITHUB_REF_NAME" dist/HabitGrid-Setup.exe dist/HabitGrid.exe dist/HabitGrid.dmg dist/HabitGrid-mac.zip \
             --repo "$GITHUB_REPOSITORY" --title "HabitGrid $GITHUB_REF_NAME" --notes-file release-notes.md

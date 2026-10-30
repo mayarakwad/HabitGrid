@@ -7,13 +7,17 @@ from pathlib import Path
 
 import webview
 
+import google_auth
 from storage import DataFile
 
 APP = "HabitGrid"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Bundled files live next to this script, or in PyInstaller's unpack folder.
-WEB = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "web"
+BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+WEB = BASE / "web"
+# The Google Cloud "Desktop app" OAuth client. Without it, Google sign-in is hidden.
+GOOGLE_CLIENT_FILE = BASE / "google_client.json"
 
 # Window color shown before the page draws, per theme (the --bg values in web/css/style.css).
 BACKGROUNDS = {
@@ -22,6 +26,7 @@ BACKGROUNDS = {
 }
 MAX_IMPORT_BYTES = 2_000_000
 _instance_mutex = None  # held for the life of the process
+_running_mutex = None  # likewise; the installer checks it (AppMutex in installer.iss)
 
 
 def data_folder():
@@ -82,23 +87,41 @@ def claim_single_instance(folder, wait=5.0):
             kernel32.CloseHandle(handle)
         hwnd = _find_app_window()
         if hwnd:
-            user32 = ctypes.WinDLL("user32")
-            user32.IsIconic.argtypes = (wintypes.HWND,)
-            user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
-            user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
-            if user32.IsIconic(hwnd):  # only un-minimize: SW_RESTORE would un-maximize too
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(hwnd)
+            _focus_window(hwnd)
             return False
         if time.monotonic() >= deadline:
             return None
         time.sleep(0.2)
 
 
+def mark_running():
+    """Lets the installer see HabitGrid is open, so it can ask to close it before updating."""
+    global _running_mutex
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        _running_mutex = kernel32.CreateMutexW(None, False, "HabitGrid.Running")
+
+
 def _show_message(text):
     if sys.platform == "win32":
         import ctypes
         ctypes.WinDLL("user32").MessageBoxW(None, text, APP, 0x40)  # MB_ICONINFORMATION
+
+
+def _focus_window(hwnd):
+    """Brings a window to the front, un-minimizing it but leaving a maximized one maximized."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32")
+    user32.IsIconic.argtypes = (wintypes.HWND,)
+    user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+    user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+    if user32.IsIconic(hwnd):  # only then: SW_RESTORE would also un-maximize
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
 
 
 def _find_app_window():
@@ -128,9 +151,11 @@ def _find_app_window():
 class Api:
     """Called from the page as window.pywebview.api.<name>(); each returns a Promise there."""
 
-    def __init__(self, store):
+    def __init__(self, store, google_client=None):
         self._store = store
         self._window = None
+        self._google_client = google_client
+        self._signin = None
 
     def load(self):
         return self._store.load()
@@ -139,7 +164,40 @@ class Api:
         return self._store.save(int(seq), str(text))
 
     def info(self):
-        return {"version": VERSION, "dataFile": str(self._store.path)}
+        return {"version": VERSION, "dataFile": str(self._store.path), "google": self._google_client is not None}
+
+    def google_sign_in(self):
+        """Signs in with Google in the system browser. Returns {sub, email, name}; raises if not."""
+        if not self._google_client:
+            raise google_auth.GoogleSignInError("Google sign-in isn't set up in this copy of HabitGrid.")
+        if self._signin:
+            self._signin.cancel()  # a new attempt replaces an abandoned one
+        signin = self._signin = google_auth.SignIn(self._google_client)
+        try:
+            identity = signin.run()
+        finally:
+            if self._signin is signin:
+                self._signin = None
+        self._bring_to_front()
+        return identity
+
+    def google_cancel(self):
+        if self._signin:
+            self._signin.cancel()
+
+    def _bring_to_front(self):
+        # After the browser, put HabitGrid back in front. Not window.restore(): in pywebview
+        # that also un-maximizes. Windows may refuse the focus change (the browser is in
+        # front), so briefly making the window topmost raises it either way.
+        try:
+            if sys.platform == "win32":
+                hwnd = _find_app_window()
+                if hwnd:
+                    _focus_window(hwnd)
+            self._window.on_top = True
+            self._window.on_top = False
+        except Exception:
+            pass
 
     def export_backup(self, filename, text):
         """Asks where to save a backup and writes it. Returns the path, or None if cancelled."""
@@ -166,11 +224,11 @@ class Api:
             raise ValueError("That file isn't a HabitGrid backup.") from None
 
 
-def create_main_window(folder):
+def create_main_window(folder, **window_options):
+    """The app's window and data file. window_options go to webview.create_window (for tests)."""
     store = DataFile(folder)
-    api = Api(store)
-    window = webview.create_window(
-        APP,
+    api = Api(store, google_auth.load_client(GOOGLE_CLIENT_FILE))
+    options = dict(
         # ?app=desktop tells the page to keep its data through the Api, not browser storage.
         url=str(WEB / "index.html") + "?app=desktop",
         js_api=api,
@@ -180,6 +238,8 @@ def create_main_window(folder):
         background_color=background_for(store.load().get("hg.look")),
         text_select=True,  # lets people select their recovery code
     )
+    options.update(window_options)
+    window = webview.create_window(APP, **options)
     api._window = window
     return window, store
 
@@ -191,6 +251,7 @@ def main():
         _show_message("HabitGrid is already open, maybe as administrator. Close it there, then try again.")
     if not claimed:
         return
+    mark_running()
     _, store = create_main_window(folder)
     webview.start(private_mode=True)  # no browser storage needed: data goes to the file
     store.wait()

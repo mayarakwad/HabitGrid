@@ -88,7 +88,7 @@ const BADGES = [
 
 /* ---------- state ---------- */
 const App = { user: null, data: null, view: 'tracker', y: 0, m: 0, tab: 'chart', flash: null, confirm: null, newBadges: new Set(), modalSeq: 0 };
-const AuthUI = { mode: null, pick: null, code: null, next: null, remember: true, reset: false };
+const AuthUI = { mode: null, pick: null, code: null, next: null, remember: true, reset: false, identity: null };
 
 function cleanSettings(raw) {
   const out = {};
@@ -185,6 +185,10 @@ function openModal(html, { wide = false } = {}) {
 function closeModal(immediate) {
   const root = $('#modal-root');
   if (App.confirm) { const r = App.confirm; App.confirm = null; r(false); }
+  if (App.googleBusy) { // the "Continue in your browser" dialog was dismissed
+    App.googleCancelled = true;
+    Store.api.google_cancel();
+  }
   if (root.hidden) return;
   const seq = ++App.modalSeq;
   const finish = () => {
@@ -257,45 +261,61 @@ function fmtBytes(n) {
 }
 
 /* ---------- auth screens ---------- */
+// Google's "G", as its sign-in buttons use.
+const GOOGLE_G = '<svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+const googleOn = () => !!Store.info.google; // only when this copy has a Google OAuth client
+const googleBtn = text => `<button type="button" class="btn google block" data-action="googleSignIn">${GOOGLE_G}<span>${text}</span></button>`;
+const orLine = '<div class="or"><span>or</span></div>';
+const pickRandom = list => list[Math.floor(Math.random() * list.length)];
+const who = (u, title) => `<div class="who"><span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><div><h1>${title}</h1><p class="muted">${esc(Auth.label(u))}</p></div></div>`;
+
 const AUTH_VIEWS = {
   pick: accounts => `<h1>Welcome back</h1><p class="auth-sub">Choose your profile to continue.</p>
-    <div class="profiles">${accounts.map((u, i) => `<button class="profile-tile" style="--c:${u.color};--i:${i}" data-action="pickProfile" data-u="${esc(u.username)}">
-      <span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><b>${esc(u.displayName)}</b><small>@${esc(u.username)}</small></button>`).join('')}
+    <div class="profiles">${accounts.map((u, i) => `<button class="profile-tile" style="--c:${u.color};--i:${i}" data-action="pickProfile" data-u="${esc(Auth.label(u))}">
+      <span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><b>${esc(u.displayName)}</b><small>${esc(Auth.label(u))}</small></button>`).join('')}
       <button class="profile-tile add" style="--i:${accounts.length}" data-action="authMode" data-m="register">
       <span class="avatar lg">${I.plus}</span><b>New profile</b><small>Create account</small></button></div>
-    <div class="auth-links"><button class="link-btn" data-action="authMode" data-m="login">Sign in with username</button></div>`,
+    <div class="auth-links"><button class="link-btn" data-action="authMode" data-m="login">Sign in with email</button>
+      ${googleOn() ? '<button class="link-btn" data-action="googleSignIn">Continue with Google</button>' : ''}</div>`,
 
   login: accounts => {
-    const u = AuthUI.pick && Auth.byName(AuthUI.pick);
+    const u = AuthUI.pick && Auth.byLogin(AuthUI.pick);
+    const back = accounts.length
+      ? '<button type="button" class="link-btn" data-action="authMode" data-m="pick">← All profiles</button>'
+      : '<button type="button" class="link-btn" data-action="authMode" data-m="register">Create an account</button>';
+    if (u && !Auth.hasPassword(u)) {
+      return `${who(u, `Hi, ${esc(u.displayName)}`)}<p class="auth-sub">This profile signs in with Google.</p>
+        ${googleOn() ? googleBtn('Continue with Google') : `<p class="form-err">Google sign-in isn't available in this copy of HabitGrid.</p>`}
+        <div class="auth-links">${back}</div>`;
+    }
     return `<form data-form="login">
-      ${u ? `<div class="who"><span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><div><h1>Hi, ${esc(u.displayName)}</h1><p class="muted">@${esc(u.username)}</p></div></div>
-        <input type="hidden" name="username" value="${esc(u.username)}">`
+      ${u ? `${who(u, `Hi, ${esc(u.displayName)}`)}<input type="hidden" name="login" value="${esc(Auth.label(u))}">`
       : `<h1>Sign in</h1><p class="auth-sub">Welcome back! Enter your details.</p>
-        <label class="field"><span>Username</span><input class="input" name="username" autocomplete="username" required autofocus autocapitalize="none" spellcheck="false"></label>`}
+        ${googleOn() ? googleBtn('Continue with Google') + orLine : ''}
+        <label class="field"><span>Email</span><input class="input" name="login" inputmode="email" autocomplete="username" required autofocus autocapitalize="none" spellcheck="false" placeholder="you@example.com"></label>`}
       ${pwField('password', 'Password', 'current-password', u ? 'autofocus' : '')}
       <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>
       <p class="form-err" role="alert"></p>
       <button class="btn primary block">Sign in</button>
-      <div class="auth-links">${accounts.length
-        ? '<button type="button" class="link-btn" data-action="authMode" data-m="pick">← All profiles</button>'
-        : '<button type="button" class="link-btn" data-action="authMode" data-m="register">Create an account</button>'}
-        <button type="button" class="link-btn" data-action="authMode" data-m="recover">Forgot password?</button></div>
+      ${u && u.google && googleOn() ? orLine + googleBtn('Continue with Google') : ''}
+      <div class="auth-links">${back}<button type="button" class="link-btn" data-action="authMode" data-m="recover">Forgot password?</button></div>
     </form>`;
   },
 
   register: accounts => `<form data-form="register">
     <h1>Create your account</h1><p class="auth-sub">Your habits, themes and stats are saved to your profile.</p>
+    ${googleOn() ? googleBtn('Sign up with Google') + '<div class="or"><span>or sign up with email</span></div>' : ''}
     <div class="two">
       <label class="field"><span>Display name</span><input class="input" name="displayName" maxlength="30" required autofocus placeholder="Alex"></label>
-      <label class="field"><span>Username</span><input class="input" name="username" minlength="3" maxlength="24" required autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="alex"></label>
+      <label class="field"><span>Email</span><input class="input" name="email" type="email" maxlength="254" required autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="alex@example.com"></label>
     </div>
     <div class="two">
       ${pwField('password', 'Password', 'new-password', 'minlength="6" data-strength')}
       ${pwField('confirm', 'Confirm password', 'new-password', 'minlength="6"')}
     </div>
     ${strengthMeter}
-    <div class="field"><span>Avatar</span>${avatarPicker(AVATARS[Math.floor(Math.random() * AVATARS.length)])}</div>
-    <div class="field"><span>Profile color</span>${colorRadios('color', ACCENTS[Math.floor(Math.random() * ACCENTS.length)])}</div>
+    <div class="field"><span>Avatar</span>${avatarPicker(pickRandom(AVATARS))}</div>
+    <div class="field"><span>Profile color</span>${colorRadios('color', pickRandom(ACCENTS))}</div>
     <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>
     <p class="form-err" role="alert"></p>
     <button class="btn primary block">Create account</button>
@@ -305,7 +325,7 @@ const AUTH_VIEWS = {
 
   recover: () => `<form data-form="recover">
     <h1>Reset password</h1><p class="auth-sub">Use the recovery code you saved when you created your account.</p>
-    <label class="field"><span>Username</span><input class="input" name="username" required autocapitalize="none" spellcheck="false" value="${esc(AuthUI.pick || '')}" ${AuthUI.pick ? '' : 'autofocus'}></label>
+    <label class="field"><span>Email</span><input class="input" name="login" inputmode="email" required autocapitalize="none" spellcheck="false" value="${esc(AuthUI.pick || '')}" ${AuthUI.pick ? '' : 'autofocus'}></label>
     <label class="field"><span>Recovery code</span><input class="input mono" name="code" required placeholder="XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" autocomplete="off" ${AuthUI.pick ? 'autofocus' : ''}></label>
     ${pwField('password', 'New password', 'new-password', 'minlength="6" data-strength')}
     ${strengthMeter}
@@ -313,6 +333,19 @@ const AUTH_VIEWS = {
     <button class="btn primary block">Reset password</button>
     <div class="auth-links"><button type="button" class="link-btn" data-action="authMode" data-m="login">← Back to sign in</button></div>
   </form>`,
+
+  // Google sign-in found a password profile with the same email: its owner connects them once.
+  linkGoogle: () => {
+    const u = Auth.byLogin(AuthUI.pick);
+    return `<form data-form="linkGoogle">${who(u, 'Connect Google?')}
+      <p class="auth-sub">A HabitGrid profile already uses ${esc(AuthUI.identity.email)}. Enter its password once to connect your Google account. After that you can sign in either way.</p>
+      ${pwField('password', 'Password', 'current-password', 'autofocus')}
+      <p class="form-err" role="alert"></p>
+      <button class="btn primary block">Connect and sign in</button>
+      <div class="auth-links"><button type="button" class="link-btn" data-action="authMode" data-m="pick">Cancel</button>
+        <button type="button" class="link-btn" data-action="authMode" data-m="recover">Forgot password?</button></div>
+    </form>`;
+  },
 
   code: () => `<h1>${AuthUI.reset ? 'Password updated 🔒' : 'Account created 🎉'}</h1>
     <p class="auth-sub">Save this recovery code somewhere safe. It's the only way to reset your password, and it won't be shown again.</p>
@@ -325,10 +358,12 @@ function renderAuth() {
   applyLook(lookBeforeLogin());
   document.title = 'Sign in · HabitGrid';
   const accounts = Auth.list();
+  if (AuthUI.mode === 'linkGoogle' && !(AuthUI.identity && Auth.byLogin(AuthUI.pick))) AuthUI.mode = null;
   const mode = AuthUI.mode || (accounts.length ? 'pick' : 'register');
   $('#app').innerHTML = `<main class="auth">
     <div class="auth-card${mode === 'register' ? ' wide' : ''}"><div class="auth-brand">${LOGO}<span>HabitGrid</span></div>${AUTH_VIEWS[mode](accounts)}</div>
-    <p class="auth-foot">${I.lock} Profiles are stored only on this computer. Passwords are salted and hashed (PBKDF2), and nothing is sent anywhere.</p>
+    <p class="auth-foot">${I.lock} Profiles and habits are stored only on this computer, and passwords are salted and hashed (PBKDF2).
+      ${googleOn() ? 'Google sign-in only tells HabitGrid your name and email.' : 'Nothing is sent anywhere.'}</p>
   </main>`;
   const f = $('.auth [autofocus]');
   if (f) f.focus();
@@ -342,7 +377,7 @@ function enterApp(user) {
   const t = Dates.today();
   App.y = t.getFullYear();
   App.m = t.getMonth();
-  Object.assign(AuthUI, { mode: null, pick: null, code: null, next: null, reset: false });
+  Object.assign(AuthUI, { mode: null, pick: null, code: null, next: null, reset: false, identity: null });
   applySettings();
   App.view = viewFromHash() || settings().startView;
   history.replaceState(null, '', '#/' + App.view);
@@ -366,7 +401,7 @@ function mountShell() {
 
 function updateMe() {
   const u = App.user, me = $('#me');
-  if (me) me.innerHTML = `<span class="avatar" style="--c:${u.color}">${esc(u.avatar)}</span><span class="me-txt"><b>${esc(u.displayName)}</b><small>@${esc(u.username)}</small></span>`;
+  if (me) me.innerHTML = `<span class="avatar" style="--c:${u.color}">${esc(u.avatar)}</span><span class="me-txt"><b>${esc(u.displayName)}</b><small>${esc(Auth.label(u))}</small></span>`;
 }
 
 const VIEWS = { tracker: viewTracker, today: viewToday, profile: viewProfile, settings: viewSettings };
@@ -671,7 +706,8 @@ function viewProfile() {
   return `<header class="page-head"><div><h1>Profile</h1><p class="muted">Your account, progress and achievements</p></div></header>
     <section class="card profile-card">
       <span class="avatar xl" style="--c:${u.color}">${esc(u.avatar)}</span>
-      <div class="pc-info"><h2>${esc(u.displayName)}</h2><p class="muted">@${esc(u.username)} · Member since ${MONTHS[since.getMonth()]} ${since.getFullYear()}</p>
+      <div class="pc-info"><h2>${esc(u.displayName)}</h2><p class="muted">${esc(Auth.label(u))} · Member since ${MONTHS[since.getMonth()]} ${since.getFullYear()}</p>
+        ${u.google ? `<p class="google-status">${GOOGLE_G}Connected to Google as ${esc(u.google.email)}</p>` : ''}
         ${u.bio ? `<p class="bio">${esc(u.bio)}</p>` : ''}</div>
       <button class="btn" data-action="editProfile">${I.edit} Edit profile</button>
     </section>
@@ -680,12 +716,17 @@ function viewProfile() {
       <div class="badges">${BADGES.map((b, i) => `<div class="badge${have.has(b.id) ? '' : ' locked'}${App.newBadges.has(b.id) ? ' new' : ''}" style="--i:${i}">
         <span class="be">${b.icon}</span><span><b>${b.name}</b><small>${b.desc}</small></span></div>`).join('')}</div></section>
     <section class="card"><h2>Account</h2><div class="menu">
-      ${menuItem('editProfile', I.edit, 'Edit profile', 'Name, bio, avatar and color')}
-      ${menuItem('changePassword', I.key, 'Change password', 'Pick a new password for this profile')}
-      ${menuItem('newCode', I.shield, 'New recovery code', 'Lets you reset a forgotten password')}
+      ${menuItem('editProfile', I.edit, 'Edit profile', 'Name, email, bio, avatar and color')}
+      ${Auth.hasPassword(u)
+        ? menuItem('changePassword', I.key, 'Change password', 'Pick a new password for this profile')
+        : menuItem('setPassword', I.key, 'Set a password', 'Also sign in with your email and a password')}
+      ${u.google
+        ? menuItem('disconnectGoogle', GOOGLE_G, 'Disconnect Google', 'Sign in with your email and password only')
+        : googleOn() ? menuItem('connectGoogle', GOOGLE_G, 'Connect Google', 'Sign in with your Google account too') : ''}
+      ${Auth.hasPassword(u) ? menuItem('newCode', I.shield, 'New recovery code', 'Lets you reset a forgotten password') : ''}
       ${menuItem('exportData', I.download, 'Export backup', 'Download your habits as a small JSON file')}
       ${menuItem('importData', I.upload, 'Import backup', 'Restore habits from a HabitGrid backup')}
-      ${menuItem('logout', I.logout, 'Sign out', 'Switch to another profile on this device')}
+      ${menuItem('logout', I.logout, 'Sign out', 'Switch to another profile on this computer')}
       ${menuItem('deleteAccount', I.trash, 'Delete account', 'Permanently remove this profile and its data', 'danger')}
     </div></section>`;
 }
@@ -705,8 +746,9 @@ function animateCounts(root) {
 async function exportData() {
   const u = App.user;
   const payload = { app: 'HabitGrid', version: 1, exported: new Date().toISOString(),
-    profile: { username: u.username, displayName: u.displayName, avatar: u.avatar, color: u.color, bio: u.bio }, data: App.data };
-  const name = `habitgrid-${u.username}-${Dates.key(new Date())}.json`, text = JSON.stringify(payload);
+    profile: { email: u.email, displayName: u.displayName, avatar: u.avatar, color: u.color, bio: u.bio }, data: App.data };
+  const slug = Auth.label(u).split('@')[0].replace(/[^a-z0-9]+/gi, '-').slice(0, 30) || 'profile';
+  const name = `habitgrid-${slug}-${Dates.key(new Date())}.json`, text = JSON.stringify(payload);
   if (Store.backend === 'desktop') {
     try {
       if (await Store.api.export_backup(name, text)) toast('Backup saved');
@@ -861,6 +903,45 @@ const ACTIONS = {
     history.replaceState(null, '', location.pathname + location.search);
     renderAuth();
   },
+  async googleSignIn(el) {
+    // The "Keep me signed in" box of the form this button sits in; screens without one keep you signed in.
+    const box = el.closest('form') && el.closest('form').elements.remember;
+    const remember = box ? box.checked : true;
+    const identity = await googleIdentity();
+    if (!identity) return;
+    let result;
+    try {
+      result = Auth.googleSignIn(identity, { avatar: pickRandom(AVATARS), color: pickRandom(ACCENTS) }, remember);
+    } catch (err) {
+      return toast(err.message);
+    }
+    if (result.link) {
+      Object.assign(AuthUI, { mode: 'linkGoogle', pick: Auth.label(result.link), identity, remember });
+      return renderAuth();
+    }
+    enterApp(result.user);
+    toast(result.created ? `Welcome, ${result.user.displayName}! 👋` : `Welcome back, ${result.user.displayName} 👋`);
+  },
+  connectGoogle() {
+    openModal(`<form data-form="connectGoogle"><div class="modal-head"><h2>Connect Google</h2>${closeBtn}</div>
+      <p class="muted">Enter your HabitGrid password, then choose your Google account in your browser.</p><br>
+      ${pwField('password', 'Password', 'current-password', 'autofocus')}
+      <p class="form-err" role="alert"></p>
+      <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">Continue with Google</button></div></form>`);
+  },
+  async disconnectGoogle() {
+    if (!Auth.hasPassword(App.user)) return toast('Set a password first, or you could no longer sign in.');
+    if (!(await confirmBox('Disconnect Google?', 'You will sign in with your email and password only.', 'Disconnect'))) return;
+    App.user = Auth.disconnectGoogle(App.user.id);
+    renderView(false);
+    toast('Google disconnected');
+  },
+  async deleteWithGoogle() {
+    const identity = await googleIdentity();
+    if (!identity) return;
+    if (!Auth.verifyGoogle(App.user.id, identity)) return toast('That was a different Google account.');
+    deleteCurrentAccount();
+  },
 
   month(el) {
     const d = +el.dataset.d, t = Dates.today();
@@ -940,6 +1021,7 @@ const ACTIONS = {
     const u = App.user;
     openModal(`<form data-form="profile"><div class="modal-head"><h2>Edit profile</h2>${closeBtn}</div>
       <label class="field"><span>Display name</span><input class="input" name="displayName" maxlength="30" required value="${esc(u.displayName)}" autofocus></label>
+      <label class="field"><span>Email</span><input class="input" name="email" type="email" maxlength="254" required autocomplete="email" value="${esc(u.email || '')}" placeholder="you@example.com"></label>
       <label class="field"><span>Bio</span><input class="input" name="bio" maxlength="80" value="${esc(u.bio || '')}" placeholder="A short motto or goal"></label>
       <div class="field"><span>Avatar</span>${avatarPicker(u.avatar)}</div>
       <div class="field"><span>Profile color</span>${colorRadios('color', u.color)}</div>
@@ -954,6 +1036,14 @@ const ACTIONS = {
       <p class="form-err" role="alert"></p>
       <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">Change password</button></div></form>`);
   },
+  setPassword() {
+    openModal(`<form data-form="setPassword"><div class="modal-head"><h2>Set a password</h2>${closeBtn}</div>
+      <p class="muted">Then you can also sign in with ${esc(App.user.email)} and this password. To make sure it's you, you'll confirm with Google first.</p><br>
+      ${pwField('next', 'New password', 'new-password', 'minlength="6" data-strength autofocus')}${strengthMeter}
+      ${pwField('confirm', 'Confirm password', 'new-password', 'minlength="6"')}
+      <p class="form-err" role="alert"></p>
+      <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">Confirm with Google</button></div></form>`);
+  },
   newCode() {
     openModal(`<form data-form="newCode"><div class="modal-head"><h2>New recovery code</h2>${closeBtn}</div>
       <p class="muted">Your old code stops working. Enter your password to continue.</p><br>
@@ -964,8 +1054,13 @@ const ACTIONS = {
   exportData,
   importData() { importBackup(); },
   deleteAccount() {
-    openModal(`<form data-form="deleteAccount"><div class="modal-head"><h2>Delete account?</h2>${closeBtn}</div>
-      <p class="muted">This permanently removes <b>@${esc(App.user.username)}</b>, its habits and history from this device. Export a backup first if you might want it back.</p><br>
+    const warning = `<p class="muted">This permanently removes <b>${esc(Auth.label(App.user))}</b>, its habits and history from this computer. Export a backup first if you might want it back.</p>`;
+    if (!Auth.hasPassword(App.user)) {
+      return openModal(`<div class="modal-head"><h2>Delete account?</h2>${closeBtn}</div>${warning}
+        <div class="modal-foot"><span class="grow"></span><button class="btn ghost" data-action="closeModal">Cancel</button>
+        <button class="btn danger solid" data-action="deleteWithGoogle">Confirm with Google and delete</button></div>`);
+    }
+    openModal(`<form data-form="deleteAccount"><div class="modal-head"><h2>Delete account?</h2>${closeBtn}</div>${warning}<br>
       ${pwField('password', 'Password', 'current-password', 'autofocus')}
       <p class="form-err" role="alert"></p>
       <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn danger solid">Delete forever</button></div></form>`);
@@ -983,21 +1078,51 @@ const ACTIONS = {
 /* ---------- forms ---------- */
 const FORMS = {
   async login(f, fd) {
-    const u = await Auth.login(fd.get('username'), fd.get('password'), fd.has('remember'));
+    const u = await Auth.login(fd.get('login'), fd.get('password'), fd.has('remember'));
     enterApp(u);
     toast(`Welcome back, ${u.displayName} 👋`);
   },
   async register(f, fd) {
     if (fd.get('password') !== fd.get('confirm')) throw new Error("Passwords don't match.");
-    const { user, code } = await Auth.register({ username: fd.get('username'), displayName: fd.get('displayName'),
+    const { user, code } = await Auth.register({ email: fd.get('email'), displayName: fd.get('displayName'),
       password: fd.get('password'), avatar: pickAvatar(fd.get('avatar')), color: pickColor(fd.get('color')) });
     Object.assign(AuthUI, { mode: 'code', code, next: user.id, remember: fd.has('remember'), reset: false });
     renderAuth();
   },
   async recover(f, fd) {
-    const { user, code } = await Auth.resetWithCode(fd.get('username'), fd.get('code'), fd.get('password'));
+    const { user, code } = await Auth.resetWithCode(fd.get('login'), fd.get('code'), fd.get('password'));
     Object.assign(AuthUI, { mode: 'code', code, next: user.id, remember: true, reset: true });
     renderAuth();
+  },
+  async linkGoogle(f, fd) {
+    const u = Auth.byLogin(AuthUI.pick);
+    const user = await Auth.linkGoogle(u.id, fd.get('password'), AuthUI.identity, AuthUI.remember);
+    enterApp(user);
+    toast('Google connected: you can now sign in either way');
+  },
+  async connectGoogle(f, fd) {
+    const password = fd.get('password');
+    await Auth.confirmPassword(App.user.id, password); // a wrong one shows here, before the browser
+    const identity = await googleIdentity(); // replaces this dialog while it waits
+    if (!identity) return;
+    try {
+      App.user = await Auth.connectGoogle(App.user.id, identity, password);
+    } catch (err) {
+      return toast(err.message);
+    }
+    renderView(false);
+    toast('Google connected: you can now sign in with it too');
+  },
+  async setPassword(f, fd) {
+    if (fd.get('next') !== fd.get('confirm')) throw new Error("Passwords don't match.");
+    if (String(fd.get('next')).length < 6) throw new Error('Password must be at least 6 characters.');
+    const identity = await googleIdentity(); // replaces this dialog while it waits
+    if (!identity) return;
+    if (!Auth.verifyGoogle(App.user.id, identity)) return toast('That was a different Google account.');
+    const code = await Auth.addPassword(App.user.id, fd.get('next'));
+    App.user = Auth.current();
+    renderView(false);
+    showRecoveryCode(code, 'Password set 🔒');
   },
   habit(f, fd) {
     const name = String(fd.get('name') || '').trim().slice(0, 40);
@@ -1018,7 +1143,8 @@ const FORMS = {
   profile(f, fd) {
     const displayName = String(fd.get('displayName') || '').trim().slice(0, 30);
     if (!displayName) throw new Error('Display name is required.');
-    App.user = Auth.update(App.user.id, { displayName, bio: String(fd.get('bio') || '').trim().slice(0, 80),
+    const email = Auth.checkEmail(fd.get('email'), App.user.id);
+    App.user = Auth.update(App.user.id, { displayName, email, bio: String(fd.get('bio') || '').trim().slice(0, 80),
       avatar: pickAvatar(fd.get('avatar')), color: pickColor(fd.get('color')) });
     closeModal();
     updateMe();
@@ -1032,23 +1158,56 @@ const FORMS = {
     toast('Password changed 🔒');
   },
   async newCode(f, fd) {
-    const code = await Auth.newRecoveryCode(App.user.id, fd.get('password'));
-    openModal(`<div class="modal-head"><h2>Your new recovery code</h2>${closeBtn}</div>
-      <p class="muted">Save it somewhere safe. It won't be shown again.</p><div class="code-box">${esc(code)}</div>
-      <div class="modal-foot"><button class="btn" data-action="copyCode" data-code="${esc(code)}">${I.copy} Copy</button><span class="grow"></span><button class="btn primary" data-action="closeModal">Done</button></div>`);
+    showRecoveryCode(await Auth.newRecoveryCode(App.user.id, fd.get('password')), 'Your new recovery code');
   },
   async deleteAccount(f, fd) {
     if (!(await Auth.verify(App.user.id, fd.get('password')))) throw new Error('Wrong password.');
-    const name = App.user.displayName;
-    Auth.remove(App.user.id);
-    App.user = App.data = null;
-    closeModal(true);
-    Object.assign(AuthUI, { mode: null, pick: null });
-    history.replaceState(null, '', location.pathname + location.search);
-    renderAuth();
-    toast(`Account “${name}” deleted`);
+    deleteCurrentAccount();
   },
 };
+
+function showRecoveryCode(code, title) {
+  openModal(`<div class="modal-head"><h2>${title}</h2>${closeBtn}</div>
+    <p class="muted">Save this recovery code somewhere safe. It's the only way to reset a forgotten password, and it won't be shown again.</p><div class="code-box">${esc(code)}</div>
+    <div class="modal-foot"><button class="btn" data-action="copyCode" data-code="${esc(code)}">${I.copy} Copy</button><span class="grow"></span><button class="btn primary" data-action="closeModal">Done</button></div>`);
+}
+
+function deleteCurrentAccount() {
+  const name = App.user.displayName;
+  Auth.remove(App.user.id);
+  App.user = App.data = null;
+  closeModal(true);
+  Object.assign(AuthUI, { mode: null, pick: null });
+  history.replaceState(null, '', location.pathname + location.search);
+  renderAuth();
+  toast(`Account “${name}” deleted`);
+}
+
+/* Google sign-in runs in the system browser (main.py); this shows a waiting dialog meanwhile.
+   Resolves to {sub, email, name}, or null if it was cancelled or failed (after saying why). */
+async function googleIdentity() {
+  if (!googleOn() || !Store.api) {
+    toast("Google sign-in isn't available in this copy of HabitGrid");
+    return null;
+  }
+  if (App.googleBusy) return null;
+  openModal(`<div class="modal-head"><h2>Continue in your browser</h2></div>
+    <p class="muted">Google's sign-in page opened in your web browser. Choose your account there, then come back to HabitGrid.</p>
+    <div class="waiting"><span class="spinner"></span>Waiting for Google…</div>
+    <div class="modal-foot"><span class="grow"></span><button class="btn ghost" data-action="closeModal">Cancel</button></div>`);
+  App.googleBusy = true; // after openModal: closing this dialog now cancels the sign-in (see closeModal)
+  App.googleCancelled = false;
+  try {
+    const identity = await Store.api.google_sign_in();
+    return App.googleCancelled ? null : identity; // cancelled after the browser part: still cancelled
+  } catch (err) {
+    if (err && err.name !== 'Cancelled') toast(String((err && err.message) || err));
+    return null;
+  } finally {
+    App.googleBusy = false;
+    closeModal(true);
+  }
+}
 
 /* ---------- events ---------- */
 document.addEventListener('click', e => {

@@ -325,6 +325,7 @@ p { margin: 0; }
 .menu-item b { display: block; font-weight: 500; }
 .menu-item small { display: block; color: var(--muted); font-size: .84em; }
 .menu-item > .ic { color: var(--muted); }
+.menu-item > .g-logo { width: 18px; height: 18px; }
 .menu-item.danger, .menu-item.danger > .ic { color: var(--danger); }
 
 /* ---------- personalize ---------- */
@@ -421,6 +422,17 @@ p { margin: 0; }
 .auth-foot .ic { width: 15px; height: 15px; margin-top: 2px; }
 .auth-links { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 14px; font-size: .9em; }
 .auth-card .row-btns { margin: 0 0 16px; }
+/* Google's sign-in button: white with the colored G, in every theme (per Google's branding). */
+.btn.google { background: #fff; color: #1f1f1f; border-color: #dadce0; gap: 10px; }
+.btn.google:hover { background: #f8f9fa; border-color: #c4c7c5; }
+.g-logo { width: 18px; height: 18px; flex: none; }
+.or { display: flex; align-items: center; gap: 12px; margin: 16px 0; color: var(--muted); font-size: .85em; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.auth-card .btn.google + .auth-links, .auth-sub + .btn.google { margin-top: 4px; }
+.waiting { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--muted); }
+.spinner { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin .7s linear infinite; }
+.google-status { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--muted); font-size: .88em; }
+.google-status .g-logo { width: 14px; height: 14px; }
 .who { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
 .profiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin-bottom: 6px; }
 .profile-tile {

@@ -4,3 +4,6 @@ __pycache__/
 build/
 dist/
 *.spec
+# Your Google Cloud OAuth client (see "Google sign-in" in the README). Never commit it.
+google_client.json
+client_secret_*.json
