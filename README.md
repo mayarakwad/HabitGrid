@@ -40,7 +40,7 @@ for today), rebuilt as a desktop app with profiles, themes and animations.
 
 ## Small on purpose
 
-- `HabitGrid.exe` is about 11 MB, one file, nothing to install. It uses the WebView2 browser engine that
+- `HabitGrid.exe` is about 12 MB (the Mac app about 10 MB zipped), one file, nothing to install. It uses the WebView2 browser engine that
   comes with Windows 10 and 11 (and WebKit on macOS) instead of shipping its own.
 - The interface uses no libraries, web fonts or images.
 - Check-ins are stored as one 31-bit mask per habit per month. A month of 6 habits plus the
