@@ -19,14 +19,20 @@ class DataFile:
         self._last_seq = 0
 
     def load(self):
-        """The saved data, or the backup if data.json is missing or damaged, or {}."""
+        """The saved data, or the backup if data.json is missing or damaged, or {}.
+
+        Any other read error (say the file is locked) is raised: treating that file as
+        missing would let the next saves replace both it and the backup.
+        """
         with self._lock:
             # A reloaded page numbers its saves afresh, so forget the old page's numbering.
             self._last_seq = 0
             for path in (self.path, self.backup):
                 try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    data = json.loads(_read(path))
+                except FileNotFoundError:
+                    continue
+                except ValueError:  # damaged, e.g. cut off mid-write (includes bad UTF-8)
                     continue
                 if isinstance(data, dict):
                     return data
@@ -64,8 +70,20 @@ class DataFile:
             pass
 
 
+# On Windows a virus scanner or backup tool can hold the file open for a moment, so both
+# reading and replacing retry briefly before giving up.
+
+def _read(path, attempts=5):
+    for attempt in range(attempts):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def _replace(src, dst, attempts=5):
-    # On Windows a virus scanner or backup tool can hold the file open for a moment.
     for attempt in range(attempts):
         try:
             os.replace(src, dst)

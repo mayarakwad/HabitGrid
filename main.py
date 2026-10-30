@@ -52,11 +52,13 @@ def background_for(look):
 
 
 def claim_single_instance(folder, wait=5.0):
-    """True if no other HabitGrid uses this data folder. Otherwise brings that one forward.
+    """Whether this copy may run: two copies saving the same file would overwrite each
+    other's changes.
 
-    Two copies saving the same file would overwrite each other's changes. If the other
-    copy has no window yet (still starting) or any more (closing), this waits up to `wait`
-    seconds for it. macOS already opens only one copy of an app, so this is Windows-only.
+    Returns True if no other HabitGrid uses this data folder, False after bringing the
+    other copy's window forward, or None if another copy holds the folder but shows no
+    window within `wait` seconds (it may still be starting or closing, which this waits
+    out). macOS already opens only one copy of an app, so this is Windows-only.
     """
     global _instance_mutex
     if sys.platform != "win32":
@@ -70,21 +72,33 @@ def claim_single_instance(folder, wait=5.0):
     deadline = time.monotonic() + wait
     while True:
         handle = kernel32.CreateMutexW(None, False, name)
-        if ctypes.get_last_error() != 183:  # not ERROR_ALREADY_EXISTS: we're the only copy
+        error = ctypes.get_last_error()
+        # No handle means the mutex exists but we may not open it: a copy started with
+        # "Run as administrator" holds it. ERROR_ALREADY_EXISTS (183): an ordinary copy.
+        if handle and error != 183:
             _instance_mutex = handle
             return True
-        kernel32.CloseHandle(handle)
+        if handle:
+            kernel32.CloseHandle(handle)
         hwnd = _find_app_window()
         if hwnd:
             user32 = ctypes.WinDLL("user32")
+            user32.IsIconic.argtypes = (wintypes.HWND,)
             user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
             user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            if user32.IsIconic(hwnd):  # only un-minimize: SW_RESTORE would un-maximize too
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             user32.SetForegroundWindow(hwnd)
             return False
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(0.2)
+
+
+def _show_message(text):
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.WinDLL("user32").MessageBoxW(None, text, APP, 0x40)  # MB_ICONINFORMATION
 
 
 def _find_app_window():
@@ -146,7 +160,10 @@ class Api:
         path = Path(chosen if isinstance(chosen, str) else chosen[0])
         if path.stat().st_size > MAX_IMPORT_BYTES:
             raise ValueError("That file is too large to be a HabitGrid backup.")
-        return path.read_text(encoding="utf-8")
+        try:
+            return path.read_text(encoding="utf-8-sig")  # also accepts a byte order mark
+        except UnicodeDecodeError:
+            raise ValueError("That file isn't a HabitGrid backup.") from None
 
 
 def create_main_window(folder):
@@ -169,7 +186,10 @@ def create_main_window(folder):
 
 def main():
     folder = data_folder()
-    if not claim_single_instance(folder):
+    claimed = claim_single_instance(folder)
+    if claimed is None:
+        _show_message("HabitGrid is already open, maybe as administrator. Close it there, then try again.")
+    if not claimed:
         return
     _, store = create_main_window(folder)
     webview.start(private_mode=True)  # no browser storage needed: data goes to the file

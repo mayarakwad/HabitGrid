@@ -10,12 +10,16 @@ if not exist .venv\Scripts\pythonw.exe (
     exit /b 1
 )
 
+rem The folder goes to PowerShell through a variable, not pasted into its code,
+rem so paths with ' or & in them work.
+set "HG_DIR=%~dp0"
 powershell -NoProfile -Command ^
+    "$d = $env:HG_DIR;" ^
     "$s = (New-Object -ComObject WScript.Shell).CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'HabitGrid.lnk'));" ^
-    "$s.TargetPath = '%~dp0.venv\Scripts\pythonw.exe';" ^
-    "$s.Arguments = '\"%~dp0main.py\"';" ^
-    "$s.WorkingDirectory = '%~dp0';" ^
-    "$s.IconLocation = '%~dp0assets\icon.ico,0';" ^
+    "$s.TargetPath = Join-Path $d '.venv\Scripts\pythonw.exe';" ^
+    "$s.Arguments = [char]34 + (Join-Path $d 'main.py') + [char]34;" ^
+    "$s.WorkingDirectory = $d;" ^
+    "$s.IconLocation = (Join-Path $d 'assets\icon.ico') + ',0';" ^
     "$s.Description = 'HabitGrid';" ^
     "$s.Save(); Write-Host ('Created ' + $s.FullName)" || goto :failed
 exit /b 0

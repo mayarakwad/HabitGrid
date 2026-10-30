@@ -70,8 +70,11 @@ through Python, which is signed:
 
 ## Build
 
+Both need Python 3.11 or newer (3.12 from python.org recommended).
+
 - **Windows:** `build.bat` makes `dist\HabitGrid.exe`.
 - **macOS:** `bash build_mac.sh` makes `dist/HabitGrid.app` and `dist/HabitGrid-mac.zip`.
+  macOS's own `python3` is too old; set `PYTHON=/path/to/python3.12` if `python3.12` isn't on your PATH.
 - **GitHub:** every push builds both on GitHub's machines (see the Actions tab). Pushing a version tag
   publishes a release:
 

@@ -45,13 +45,34 @@ class MainTest(unittest.TestCase):
     def test_single_instance_per_data_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = Path(tmp) / "a"
-            self.assertTrue(main.claim_single_instance(first, wait=0))
+            self.assertIs(main.claim_single_instance(first, wait=0), True)
             held = main._instance_mutex
             started = time.monotonic()
-            self.assertFalse(main.claim_single_instance(first, wait=0.5))  # no window to hand over to
+            self.assertIsNone(main.claim_single_instance(first, wait=0.5))  # taken, no window to hand over to
             self.assertGreaterEqual(time.monotonic() - started, 0.5)
-            self.assertTrue(main.claim_single_instance(Path(tmp) / "b", wait=0))
+            self.assertIs(main.claim_single_instance(Path(tmp) / "b", wait=0), True)
             del held
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_mutex_we_may_not_open_counts_as_taken(self):
+        # A copy run as administrator owns a mutex this copy may not open: CreateMutexW
+        # returns no handle (ERROR_ACCESS_DENIED), which must not read as "we're alone".
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("ctypes.WinDLL") as windll, mock.patch("ctypes.get_last_error", return_value=5), \
+                mock.patch.object(main, "_find_app_window", return_value=None):
+            windll.return_value.CreateMutexW.return_value = None
+            self.assertIsNone(main.claim_single_instance(Path(tmp), wait=0))
+
+    def test_import_backup_accepts_a_byte_order_mark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backup = Path(tmp) / "backup.json"
+            backup.write_bytes(b"\xef\xbb\xbf" + b'{"habits": []}')
+            api = main.Api(DataFile(tmp))
+            api._window = mock.Mock(create_file_dialog=mock.Mock(return_value=(str(backup),)))
+            self.assertEqual(api.import_backup(), '{"habits": []}')
+            backup.write_bytes('{"habits": []}'.encode("utf-16"))
+            with self.assertRaisesRegex(ValueError, "isn't a HabitGrid backup"):
+                api.import_backup()
 
 
 if __name__ == "__main__":

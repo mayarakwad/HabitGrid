@@ -1084,6 +1084,15 @@ document.addEventListener('change', e => {
   if (t.id === 'import-file' && t.files[0]) importFile(t.files[0]).finally(() => { t.value = ''; });
 });
 
+// Without these, dropping a file or link on the window navigates away from the app.
+// A dropped backup file is imported instead.
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer && e.dataTransfer.files[0];
+  if (file && App.user) importFile(file);
+});
+
 // Redraw the chart when the width changes (not on mobile toolbar height changes).
 let lastWidth = innerWidth, resizeTimer;
 window.addEventListener('resize', () => {

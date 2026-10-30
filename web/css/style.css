@@ -38,7 +38,9 @@ body {
   font: var(--fs)/1.5 var(--font); -webkit-font-smoothing: antialiased;
   transition: background-color .35s, color .35s, opacity .3s;
 }
-.booting body { opacity: 0; }
+/* Until the saved theme is applied: hide the page and let the window's own background
+   (main.py picks it to match the theme) show, rather than the default dark one. */
+.booting body { opacity: 0; background: transparent; }
 code { font-family: ui-monospace, Consolas, monospace; font-size: .9em; overflow-wrap: anywhere; }
 .version { font-size: .8em; }
 button, input, select, textarea { font: inherit; color: inherit; }

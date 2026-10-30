@@ -5,8 +5,14 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 if [ ! -x .venv/bin/python ]; then
+    # Apple's own python3 is 3.9, too old for the pinned requirements.
+    py="${PYTHON:-$(command -v python3.12 || command -v python3 || true)}"
+    if [ -z "$py" ] || ! "$py" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+        echo "HabitGrid needs Python 3.11 or newer (found: ${py:-none}). Install Python 3.12 from python.org, or set PYTHON=/path/to/python3.12."
+        exit 1
+    fi
     echo "Creating virtual environment..."
-    "${PYTHON:-python3}" -m venv .venv
+    "$py" -m venv .venv
 fi
 
 echo "Installing requirements..."

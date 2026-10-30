@@ -4,6 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from storage import MAX_BYTES, DataFile
 
@@ -46,6 +47,28 @@ class DataFileTest(unittest.TestCase):
         self.store.save(2, '{"v": 2}')
         self.store.path.write_text('{"v": 2', "utf-8")  # cut off mid-write
         self.assertEqual(self.store.load(), {"v": 1})
+
+    def test_unreadable_file_is_an_error_not_empty(self):
+        self.store.save(1, '{"v": 1}')
+        self.store.save(2, '{"v": 2}')
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError("locked")):
+            with self.assertRaises(PermissionError):
+                self.store.load()
+        self.assertEqual(self.store.load(), {"v": 2})
+
+    def test_briefly_locked_file_is_read_after_a_retry(self):
+        self.store.save(1, '{"v": 1}')
+        real = Path.read_text
+        calls = []
+
+        def flaky(path, *args, **kwargs):
+            calls.append(path)
+            if len(calls) == 1:
+                raise PermissionError("locked for a moment")
+            return real(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", flaky):
+            self.assertEqual(self.store.load(), {"v": 1})
 
     def test_rejects_non_objects_and_oversized_data(self):
         with self.assertRaises(ValueError):
