@@ -1,0 +1,13 @@
+{
+  "name": "HabitGrid",
+  "short_name": "HabitGrid",
+  "description": "A tiny, private habit tracker with a monthly grid, charts, profiles and themes.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#191919",
+  "theme_color": "#191919",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
