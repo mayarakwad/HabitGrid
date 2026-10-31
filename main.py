@@ -11,7 +11,7 @@ import google_auth
 from storage import DataFile
 
 APP = "HabitGrid"
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 
 # Bundled files live next to this script, or in PyInstaller's unpack folder.
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))

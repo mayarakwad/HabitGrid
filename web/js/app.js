@@ -217,7 +217,7 @@ function replay(el, cls) {
 }
 
 function celebrate() {
-  const s = settings();
+  const s = App.data ? settings() : lookBeforeLogin(); // before sign-in, the motion setting comes from the saved look
   if (!s.celebrate || s.motion !== 'full') return;
   const box = document.createElement('div');
   box.className = 'confetti';
@@ -402,8 +402,8 @@ const AUTH_VIEWS = {
     const chosen = [].concat(answers[q.id] || []);
     const focusOn = chosen.length ? chosen[0] : q.options[0][0]; // keyboard focus lands on the answer, or the first choice
     return `<div class="quiz">${quizTop(step + 1)}
-      <div class="quiz-step"><h1>${q.title}</h1><p class="auth-sub">${q.sub}</p>
-      <div class="quiz-options${q.options[0][3] ? ' one' : ''}" role="${q.max ? 'group' : 'radiogroup'}">${q.options.map(([v, icon, label, desc], i) =>
+      <div class="quiz-step"><h1 id="quiz-q">${q.title}</h1><p class="auth-sub" id="quiz-sub">${q.sub}</p>
+      <div class="quiz-options${q.options[0][3] ? ' one' : ''}" role="${q.max ? 'group' : 'radiogroup'}" aria-labelledby="quiz-q" aria-describedby="quiz-sub">${q.options.map(([v, icon, label, desc], i) =>
         `<button class="quiz-opt" style="--i:${i}" role="${q.max ? 'checkbox' : 'radio'}" aria-checked="${chosen.includes(v)}" data-action="quizPick" data-v="${v}"${v === focusOn ? ' autofocus' : ''}>
           <span class="qo-icon">${icon}</span><span><b>${label}</b>${desc ? `<small>${desc}</small>` : ''}</span></button>`).join('')}</div>
       ${q.max ? `<button class="btn primary block" data-action="quizNext" ${chosen.length ? '' : 'disabled'}>Continue</button>` : ''}</div></div>`;
@@ -502,31 +502,35 @@ function commitPlan() {
 }
 
 // A new profile starts from its answers: the chosen habits, and the plan shown on Today and Profile.
+function planInto(d, plan) {
+  d.plan = plan;
+  if (d.habits.length) return;
+  const key = Dates.key(Dates.today());
+  for (const [id, icon, name, color] of HABIT_CHOICES) {
+    if (plan.habits.includes(id)) d.habits.push({ id: Habits.newId(), name, icon, color, created: key });
+  }
+}
 function applyPlan(plan) {
   if (!plan || !App.data) return;
-  App.data.plan = plan;
-  if (!App.data.habits.length) {
-    const key = Dates.key(Dates.today());
-    for (const [id, icon, name, color] of HABIT_CHOICES) {
-      if (plan.habits.includes(id)) App.data.habits.push({ id: Habits.newId(), name, icon, color, created: key });
-    }
-  }
+  planInto(App.data, plan);
   save();
   renderView(true);
   checkBadges();
 }
 
 // "Hold to commit": the button fills while pressed (mouse, touch, or Space/Enter) and commits when full.
-let holdTimer = null;
+let holdTimer = null, holdKey = null, keyHoldAt = -Infinity;
+const isActivateKey = e => e.key === ' ' || e.key === 'Enter';
+function finishHold(el) {
+  if (!el.isConnected || el.classList.contains('held')) return;
+  el.classList.remove('holding');
+  el.classList.add('held');
+  if (el.dataset.hold === 'commit') commitPlan();
+}
 function startHold(el) {
   if (holdTimer || el.classList.contains('held')) return;
   el.classList.add('holding');
-  holdTimer = setTimeout(() => {
-    holdTimer = null;
-    el.classList.remove('holding');
-    el.classList.add('held');
-    if (el.dataset.hold === 'commit') commitPlan();
-  }, 1200);
+  holdTimer = setTimeout(() => { holdTimer = null; finishHold(el); }, 1200);
 }
 function stopHold() {
   if (!holdTimer) return;
@@ -545,11 +549,25 @@ document.addEventListener('pointerout', e => {
   if (el && !el.contains(e.relatedTarget)) stopHold();
 });
 document.addEventListener('keydown', e => {
+  if (!isActivateKey(e)) return;
+  // A key that's still held after its screen changed must not act on the next one
+  // (type into the sign-up form, or answer the next question).
+  if (e.repeat && (e.key === holdKey || (e.target.closest && e.target.closest('.quiz, .quiz-intro')))) return e.preventDefault();
   const el = e.target.closest && e.target.closest('[data-hold]');
-  if (el && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); if (!e.repeat) startHold(el); }
+  if (el) { e.preventDefault(); holdKey = e.key; keyHoldAt = performance.now(); startHold(el); }
 });
 document.addEventListener('keyup', e => {
-  if (e.target.closest && e.target.closest('[data-hold]') && (e.key === ' ' || e.key === 'Enter')) stopHold();
+  if (!isActivateKey(e)) return;
+  if (e.key === holdKey) holdKey = null;
+  stopHold(); // wherever focus went meanwhile
+});
+document.addEventListener('focusout', e => { if (e.target.closest && e.target.closest('[data-hold]')) stopHold(); });
+window.addEventListener('blur', stopHold);
+// Screen readers and voice control send a single click with no press to hold: commit on that.
+// A real key press also ends in such a click, so ignore one that follows a keyboard hold.
+document.addEventListener('click', e => {
+  const el = e.target.closest && e.target.closest('[data-hold]');
+  if (el && e.detail === 0 && !holdTimer && performance.now() - keyHoldAt > 1500) finishHold(el);
 });
 
 /* ---------- app shell ---------- */
@@ -1060,7 +1078,8 @@ const ACTIONS = {
   authMode(el) {
     AuthUI.mode = el.dataset.m;
     if (el.dataset.m === 'pick' || el.dataset.m === 'register') AuthUI.pick = null;
-    if (el.dataset.skip) AuthUI.plan = AuthUI.quiz = null;
+    // Answers belong to the sign-up they were made for: leaving that flow drops them.
+    if (el.dataset.skip || !['intro', 'quiz', 'commit', 'register'].includes(el.dataset.m)) AuthUI.plan = AuthUI.quiz = null;
     renderAuth();
   },
   pickProfile(el) { AuthUI.mode = 'login'; AuthUI.pick = el.dataset.u; renderAuth(); },
@@ -1143,7 +1162,7 @@ const ACTIONS = {
       Object.assign(AuthUI, { mode: 'linkGoogle', pick: Auth.label(result.link), identity, remember });
       return renderAuth();
     }
-    const plan = AuthUI.plan;
+    const plan = screenBefore.mode === 'register' ? AuthUI.plan : null; // only "Sign up with Google" after the questions
     enterApp(result.user);
     if (result.created) applyPlan(plan);
     toast(result.created ? `Welcome, ${result.user.displayName}! 👋` : `Welcome back, ${result.user.displayName} 👋`);
@@ -1315,6 +1334,11 @@ const FORMS = {
     if (fd.get('password') !== fd.get('confirm')) throw new Error("Passwords don't match.");
     const { user, code } = await Auth.register({ email: fd.get('email'), displayName: fd.get('displayName'),
       password: fd.get('password'), avatar: pickAvatar(fd.get('avatar')), color: pickColor(fd.get('color')) });
+    if (AuthUI.plan) { // save the answers with the account now, in case the app closes on the code screen
+      const d = loadData(user.id);
+      planInto(d, AuthUI.plan);
+      Store.write('data.' + user.id, d);
+    }
     Object.assign(AuthUI, { mode: 'code', code, next: user.id, remember: fd.has('remember'), reset: false });
     renderAuth();
   },

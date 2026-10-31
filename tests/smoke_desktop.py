@@ -38,6 +38,11 @@ window.__smoke = null;
     await tap('.quiz-opt[data-v="week"]', 450);                                     // history
     await tap('.quiz-opt[data-v="phone"]'); await tap('[data-action="quizNext"]');   // blockers
     await tap('.quiz-opt[data-v="morning"]', 450);                                  // peak
+    // A held Enter's repeats don't answer the next question.
+    const rep = new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true });
+    document.querySelector('.quiz-opt').dispatchEvent(rep);
+    r.heldEnterIgnored = rep.defaultPrevented;
+    r.questionIsLabel = document.querySelector('.quiz-options').getAttribute('aria-labelledby') === 'quiz-q' && !!document.getElementById('quiz-q');
     r.habitsSuggested = $$('.quiz-opt[aria-checked="true"]').map(b => b.dataset.v).join() === 'workout,walk,water,read';
     await tap('.quiz-opt[data-v="journal"]'); await tap('[data-action="quizNext"]'); // habits: 5
     await tap('.quiz-opt[data-v="locked"]', 450);                                   // mode
@@ -51,15 +56,26 @@ window.__smoke = null;
     document.querySelector('[data-hold="commit"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
     await wait(1500);
     r.holdCommits = AuthUI.mode === 'register' && AuthUI.plan.habits.length === 5 && AuthUI.plan.mode === 'locked';
+    // Screen readers and voice control send one click, with no hold: that commits too.
+    await tap('[data-m="commit"]');
+    await tap('[data-hold="commit"]', 200);
+    r.assistiveClickCommits = AuthUI.mode === 'register' && !!AuthUI.plan;
     r.googleButtonOnSignUp = !!document.querySelector('[data-form="register"] .btn.google');
     r.badEmail = await fails(() => Auth.register({ email: 'not-an-email', displayName: 'X', password: 'smoke-pass-1' }), 'valid email');
 
-    const { user, code } = await Auth.register({ email: 'Smoke@Example.com', displayName: 'Smoke Test',
-      password: 'smoke-pass-1', avatar: '🦊', color: '#2383e2' });
-    r.codeLength = code.length;
+    // Sign up through the form, like a person.
+    const form = document.querySelector('[data-form="register"]');
+    for (const [name, value] of Object.entries({ displayName: 'Smoke Test', email: 'Smoke@Example.com', password: 'smoke-pass-1', confirm: 'smoke-pass-1' })) form.elements[name].value = value;
+    form.requestSubmit();
+    await wait(1500); // password hashing
+    const user = Auth.byLogin('smoke@example.com');
+    if (!user || AuthUI.mode !== 'code') throw new Error('sign-up form failed: ' + (document.querySelector('.form-err') || {}).textContent);
+    r.codeLength = AuthUI.code.length;
+    // The answers are saved with the account before "Continue", in case the app closes on the code screen.
+    const early = Store.read('data.' + user.id, {});
+    r.planSavedWithAccount = !!early.plan && early.plan.mode === 'locked' && early.habits.length === 5;
     r.duplicateEmail = await fails(() => Auth.register({ email: 'smoke@example.com', displayName: 'Y', password: 'another-1' }), 'already has a profile');
-    AuthUI.next = user.id; AuthUI.remember = true;
-    ACTIONS.enter(); // what "Continue" does after the recovery code screen
+    await tap('[data-action="enter"]', 300); // "Continue" after the recovery code screen
     r.planHabits = App.data.habits.map(h => h.name).join('|') === 'Work out|Walk 8,000 steps|Drink 2 liters of water|Read 10 pages|Journal'
       || App.data.habits.map(h => h.name).join('|');
     r.planSaved = App.data.plan && App.data.plan.why === 'prove';
@@ -162,6 +178,15 @@ window.__smoke = null;
   r.pickTiles = document.querySelectorAll('.profile-tile:not(.add)').length;
   document.querySelector('.profile-tile.add').click();
   r.newProfileAsksQuestionsFirst = !!document.querySelector('[data-action="quizStart"]');
+  // Answers left behind (questions done, then "I already have an account") are dropped, so a
+  // later Google sign-up from the login screen can't pick them up.
+  ACTIONS.quizStart();
+  Object.assign(AuthUI.quiz.answers, { goals: ['fit'], why: 'stuck', history: 'days', blockers: ['busy'], peak: 'night', habits: ['walk'], mode: 'steady' });
+  quizGo(7);
+  document.querySelector('[data-hold="commit"]').click();
+  const hadPlan = !!AuthUI.plan;
+  document.querySelector('[data-action="authMode"][data-m="login"]').click();
+  r.abandonedPlanDropped = hadPlan && AuthUI.plan === null && AuthUI.quiz === null;
   AuthUI.mode = 'pick'; renderAuth();
   r.pickOffersGoogle = document.querySelector('.auth-links [data-m="login"]').textContent.includes('Google');
   AuthUI.pick = 'gia@gmail.com'; AuthUI.mode = 'login'; renderAuth();
@@ -324,8 +349,8 @@ def main():
                     "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True,
                     "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
                     "pageInertBehindDialog": True, "pageBackAfterDialog": True,
-                    "profileShowsPlan": True, "newProfileAsksQuestionsFirst": True,
-                    "version": "1.1.3"}
+                    "profileShowsPlan": True, "newProfileAsksQuestionsFirst": True, "abandonedPlanDropped": True,
+                    "version": "1.1.4"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

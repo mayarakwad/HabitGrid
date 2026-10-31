@@ -480,6 +480,8 @@ p { margin: 0; }
 .hold-btn { position: relative; overflow: hidden; isolation: isolate; user-select: none; touch-action: none; }
 .hold-fill { position: absolute; inset: 0; z-index: -1; width: 0; background: color-mix(in srgb, #fff 30%, transparent); }
 .hold-btn.holding .hold-fill { width: 100%; transition: width 1.2s linear; }
+/* The fill shows how long to keep holding, so it stays even with Motion off. */
+:root[data-motion="off"] .hold-btn.holding .hold-fill { transition: width 1.2s linear !important; }
 .hold-btn.held .hold-fill { width: 100%; }
 .hold-hint { font-size: .82em; margin-top: 8px; }
 .your-why { display: block; font-size: .75em; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); font-weight: 600; }
