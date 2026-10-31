@@ -156,24 +156,30 @@ jobs:
           fi
           kill "$pid"
 
+  # Windows is published as soon as it's built, so a long queue for GitHub's Mac machines
+  # can't hold the release back. release-mac adds the Mac files to the same release once
+  # the Mac build succeeds (if it couldn't get a machine, "Re-run failed jobs" does both).
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos]
+    needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write  # to publish the release
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: HabitGrid-windows
           path: dist
-          merge-multiple: true
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GOOGLE_ON: ${{ secrets.GOOGLE_CLIENT_JSON != '' }}
         run: |
+          if [ "$GOOGLE_ON" = "true" ]; then signin="Sign in with your email and password, or with Google."
+          else signin="Sign in with your email and password."; fi
           cat > release-notes.md <<'EOF'
-          HabitGrid is a small habit tracker for your computer: a monthly checkbox grid, charts, a Today view, profiles and themes. Sign in with your email and password, or with Google. Your habits stay on your computer.
+          HabitGrid is a small habit tracker for your computer: a monthly checkbox grid, charts, a Today view, profiles and themes. SIGN_IN_LINE Your habits stay on your computer.
 
           ### Windows
           Download **HabitGrid-Setup.exe** and run it: it installs HabitGrid with Start menu and Desktop shortcuts and an uninstaller (Settings > Apps). No administrator rights needed.
@@ -183,6 +189,34 @@ jobs:
 
           Your data is saved in `%APPDATA%\HabitGrid\data.json` and stays there if you uninstall.
 
+          <!-- mac -->
+          ### macOS
+          The Mac version is added here as soon as GitHub's Mac build has run.
+          <!-- /mac -->
+          EOF
+          sed -i "s/SIGN_IN_LINE/$signin/" release-notes.md
+          gh release create "$GITHUB_REF_NAME" dist/HabitGrid-Setup.exe dist/HabitGrid.exe \
+            --repo "$GITHUB_REPOSITORY" --title "HabitGrid $GITHUB_REF_NAME" --notes-file release-notes.md
+
+  release-mac:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to add to the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: HabitGrid-mac
+          path: dist
+
+      - name: Add the Mac version to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/HabitGrid.dmg dist/HabitGrid-mac.zip --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+          cat > mac.md <<'EOF'
           ### macOS (Apple Silicon, M1 or later)
           Not yet tested by a person on a real Mac; please report what happens.
           Open **HabitGrid.dmg** and drag HabitGrid to Applications. Because the app isn't notarized yet, macOS will refuse to open it the first time: go to System Settings > Privacy & Security and click **Open Anyway**. Or install it from Terminal, which skips that step:
@@ -193,5 +227,11 @@ jobs:
 
           Your data is saved in `~/Library/Application Support/HabitGrid/data.json`.
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/HabitGrid-Setup.exe dist/HabitGrid.exe dist/HabitGrid.dmg dist/HabitGrid-mac.zip \
-            --repo "$GITHUB_REPOSITORY" --title "HabitGrid $GITHUB_REF_NAME" --notes-file release-notes.md
+          python3 - <<'PY'
+          import re
+          notes = open("notes.md", encoding="utf-8").read()
+          mac = open("mac.md", encoding="utf-8").read().strip()
+          notes = re.sub(r"<!-- mac -->.*?<!-- /mac -->", lambda m: "<!-- mac -->\n" + mac + "\n<!-- /mac -->", notes, flags=re.S)
+          open("notes.md", "w", encoding="utf-8").write(notes)
+          PY
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
