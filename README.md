@@ -19,6 +19,9 @@ one-time "open anyway" step.
 ## Features
 
 **Accounts**
+- **Questions first:** a new profile starts with 7 quick questions (goals, your why, what pulls you off
+  track, when you're most locked in, first habits, how hard to push) and a "hold to commit" step. The
+  answers become the profile's starting habits, and "your why" shows on the Today view. They can be skipped.
 - Sign up and sign in with your **email and password**, or **continue with Google**.
 - Connect Google to an email profile (or set a password on a Google profile) to sign in either way.
 - Several profiles on one computer, "Keep me signed in", show/hide password, a password-strength meter,

@@ -60,6 +60,65 @@ const HABIT_ICONS = ['✅', '🏋️', '🏃', '🧘', '📚', '📖', '💼', '
 const STARTERS = [['Exercise', '🏋️', '#e5484d'], ['Study', '📚', '#2383e2'], ['Read', '📖', '#7c5cff'], ['Drink water', '💧', '#12a594'], ['Meditate', '🧘', '#30a46c']];
 const QUOTES = ['Small steps every day add up.', 'Progress, not perfection.', "Don't break the chain.", 'Consistency beats intensity.',
   'Show up for yourself today.', 'One check at a time.', 'Make it easy, make it daily.'];
+/* First-run questions: asked before signing up; the answers become the new profile's plan
+   (its first habits, its "why", and how hard to push). */
+const HABIT_CHOICES = [
+  ['workout', '🏋️', 'Work out', '#e5484d'], ['walk', '🚶', 'Walk 8,000 steps', '#30a46c'],
+  ['water', '💧', 'Drink 2 liters of water', '#12a594'], ['read', '📖', 'Read 10 pages', '#7c5cff'],
+  ['study', '📚', 'Study for 30 minutes', '#2383e2'], ['meditate', '🧘', 'Meditate for 10 minutes', '#30a46c'],
+  ['journal', '✍️', 'Journal', '#d6409f'], ['sleep', '😴', 'In bed by 11 pm', '#64748b'],
+  ['phone', '📵', 'No phone for the first hour', '#f76b15'], ['social', '📱', 'Under 1 hour of social media', '#e0a100'],
+  ['cold', '🚿', 'Cold shower', '#0090ff'], ['bed', '🛏️', 'Make your bed', '#12a594'],
+  ['deep', '🎯', '1 hour of deep work', '#e5484d'], ['plan', '🗓️', 'Plan tomorrow', '#7c5cff'],
+  ['sugar', '🍎', 'No added sugar', '#30a46c'], ['screens', '🌙', 'No screens after 10 pm', '#64748b'],
+];
+const GOAL_HABITS = {
+  discipline: ['bed', 'phone', 'cold'], fit: ['workout', 'walk', 'water'], focus: ['deep', 'phone', 'meditate'],
+  sleep: ['sleep', 'screens'], learn: ['read', 'study'], screen: ['phone', 'social'], calm: ['meditate', 'journal', 'walk'],
+  productive: ['plan', 'deep', 'bed'],
+};
+const QUESTIONS = [
+  { id: 'goals', title: 'What do you want to change?', sub: 'Pick up to 3.', max: 3, options: [
+    ['discipline', '🔥', 'Build discipline'], ['fit', '💪', 'Get in shape'], ['focus', '🎯', 'Focus better'],
+    ['sleep', '😴', 'Sleep better'], ['learn', '📚', 'Read and learn more'], ['screen', '📵', 'Spend less time on my phone'],
+    ['calm', '🧘', 'Feel calmer'], ['productive', '⚡', 'Get more done']] },
+  { id: 'why', title: 'Why now?', sub: "Be honest. You'll see this on the days it's hard.", options: [
+    ['restart', '🔁', "I'm tired of starting over"], ['prove', '🏆', 'I want to prove it to myself'],
+    ['others', '🤝', 'Someone is counting on me'], ['stuck', '🧱', 'I feel stuck'],
+    ['goal', '🎯', 'I have a big goal coming up'], ['better', '🌱', 'I just want to feel better']] },
+  { id: 'history', title: 'How long do your habits usually last?', sub: 'No judgment. This sets your starting pace.', options: [
+    ['days', '⏳', 'A few days'], ['week', '📅', 'About a week'], ['month', '🗓️', 'A month or so'],
+    ['most', '✅', 'I stick with most of them'], ['first', '✨', 'This is my first time tracking habits']] },
+  { id: 'blockers', title: 'What pulls you off track?', sub: 'Pick up to 3.', max: 3, options: [
+    ['phone', '📱', 'My phone and social media'], ['energy', '🪫', 'Low energy'], ['routine', '🌀', 'No routine'],
+    ['motivation', '📉', 'Motivation fades'], ['busy', '⏰', "I'm too busy"], ['stress', '😮‍💨', 'Stress']] },
+  { id: 'peak', title: 'When are you most locked in?', sub: 'Plan your hardest habits for this time.', options: [
+    ['dawn', '🌅', 'Early morning, before 7'], ['morning', '☀️', 'Morning'], ['afternoon', '🌤️', 'Afternoon'],
+    ['evening', '🌆', 'Evening'], ['night', '🌙', 'Late at night']] },
+  { id: 'habits', title: 'Pick your first habits', sub: 'We picked a few from your answers. 2 to 4 is a strong start; up to 6.', max: 6,
+    options: HABIT_CHOICES.map(([v, icon, label]) => [v, icon, label]) },
+  { id: 'mode', title: 'How hard do you want to push?', sub: 'You can change your habits anytime.', options: [
+    ['steady', '🌱', 'Steady', 'Build slowly. Missing a day is OK.'],
+    ['locked', '🔒', 'Locked in', 'Show up every day. No zero days.'],
+    ['extreme', '⚔️', 'No excuses', 'Every habit, every day. Perfect days only.']] },
+];
+const answerLabel = (qid, v) => {
+  const option = QUESTIONS.find(q => q.id === qid).options.find(o => o[0] === v);
+  return option ? option[2] : '';
+};
+// Keeps only answers that are real choices (they also come back from saved data and backups).
+function cleanPlan(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const plan = {};
+  for (const q of QUESTIONS) {
+    const allowed = new Set(q.options.map(o => o[0])), v = raw[q.id];
+    if (q.max) plan[q.id] = Array.isArray(v) ? [...new Set(v.filter(x => allowed.has(x)))].slice(0, q.max) : [];
+    else plan[q.id] = allowed.has(v) ? v : null;
+  }
+  plan.committed = /^\d{4}-\d{2}-\d{2}$/.test(raw.committed) ? raw.committed : null;
+  return plan;
+}
+
 const NAV = [['tracker', I.grid, 'Tracker'], ['today', I.target, 'Today'], ['profile', I.user, 'Profile'], ['settings', I.sliders, 'Personalize']];
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -88,7 +147,8 @@ const BADGES = [
 
 /* ---------- state ---------- */
 const App = { user: null, data: null, view: 'tracker', y: 0, m: 0, tab: 'chart', flash: null, confirm: null, newBadges: new Set(), modalSeq: 0 };
-const AuthUI = { mode: null, pick: null, code: null, next: null, remember: true, reset: false, identity: null };
+const AuthUI = { mode: null, pick: null, code: null, next: null, remember: true, reset: false, identity: null,
+  quiz: null, plan: null, lastMode: null }; // quiz: {step, answers} while answering; plan: the answers, until signed up
 
 function cleanSettings(raw) {
   const out = {};
@@ -132,6 +192,7 @@ function loadData(id) {
   d.log = d.log && typeof d.log === 'object' ? d.log : {};
   d.settings = cleanSettings(d.settings);
   d.badges = Array.isArray(d.badges) ? d.badges : [];
+  d.plan = cleanPlan(d.plan);
   return d;
 }
 function save() {
@@ -277,7 +338,7 @@ const AUTH_VIEWS = {
   pick: accounts => `<h1>Welcome back</h1><p class="auth-sub">Choose your profile to continue.</p>
     <div class="profiles">${accounts.map((u, i) => `<button class="profile-tile" style="--c:${u.color};--i:${i}" data-action="pickProfile" data-u="${esc(Auth.label(u))}">
       <span class="avatar lg" style="--c:${u.color}">${esc(u.avatar)}</span><b>${esc(u.displayName)}</b><small>${esc(Auth.label(u))}</small></button>`).join('')}
-      <button class="profile-tile add" style="--i:${accounts.length}" data-action="authMode" data-m="register">
+      <button class="profile-tile add" style="--i:${accounts.length}" data-action="authMode" data-m="intro">
       <span class="avatar lg">${I.plus}</span><b>New profile</b><small>Create account</small></button></div>
     <div class="auth-links"><button class="link-btn" data-action="authMode" data-m="login">${googleOn() ? 'Sign in with email or Google' : 'Sign in with email'}</button></div>`,
 
@@ -285,7 +346,7 @@ const AUTH_VIEWS = {
     const u = AuthUI.pick && Auth.byLogin(AuthUI.pick);
     const back = accounts.length
       ? '<button type="button" class="link-btn" data-action="authMode" data-m="pick">← All profiles</button>'
-      : '<button type="button" class="link-btn" data-action="authMode" data-m="register">Create an account</button>';
+      : '<button type="button" class="link-btn" data-action="authMode" data-m="intro">Create an account</button>';
     if (u && !Auth.hasPassword(u)) {
       return `${who(u, `Hi, ${esc(u.displayName)}`)}<p class="auth-sub">This profile signs in with Google.</p>
         ${googleOn() ? `<label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>${googleBtn('Continue with Google')}`
@@ -307,7 +368,9 @@ const AUTH_VIEWS = {
   },
 
   register: accounts => `<form data-form="register">
-    <h1>Create your account</h1><p class="auth-sub">Your habits, themes and stats are saved to your profile.</p>
+    <h1>Create your account</h1><p class="auth-sub">${AuthUI.plan
+      ? `Your plan is ready: ${AuthUI.plan.habits.length} habit${AuthUI.plan.habits.length === 1 ? '' : 's'}, ${esc(answerLabel('mode', AuthUI.plan.mode) || 'your pace')} mode. Create your account to start.`
+      : 'Your habits, themes and stats are saved to your profile.'}</p>
     ${googleOn() ? googleBtn('Sign up with Google') + '<div class="or"><span>or sign up with email</span></div>' : ''}
     <div class="two">
       <label class="field"><span>Display name</span><input class="input" name="displayName" maxlength="30" required autofocus placeholder="Alex"></label>
@@ -323,9 +386,45 @@ const AUTH_VIEWS = {
     <label class="check"><input type="checkbox" name="remember" checked> Keep me signed in</label>
     <p class="form-err" role="alert"></p>
     <button class="btn primary block">Create account</button>
-    ${accounts.length ? `<div class="auth-links"><button type="button" class="link-btn" data-action="authMode" data-m="pick">← All profiles</button>
-      <button type="button" class="link-btn" data-action="authMode" data-m="login">I already have an account</button></div>` : ''}
+    <div class="auth-links"><button type="button" class="link-btn" data-action="authMode" data-m="${AuthUI.plan ? 'commit' : 'intro'}">← Back to the questions</button>
+      ${accounts.length ? '<button type="button" class="link-btn" data-action="authMode" data-m="login">I already have an account</button>' : ''}</div>
   </form>`,
+
+  intro: accounts => `<div class="quiz-intro"><div class="big-emoji">🔥</div>
+    <h1>Let's lock in.</h1>
+    <p class="auth-sub">Answer ${QUESTIONS.length} quick questions and HabitGrid builds your starting plan. Then you'll create your account.</p>
+    <button class="btn primary block" data-action="quizStart" autofocus>Start</button>
+    <div class="auth-links">${accounts.length ? '<button class="link-btn" data-action="authMode" data-m="pick">← All profiles</button>' : '<span></span>'}
+      <button class="link-btn" data-action="authMode" data-m="register" data-skip="1">Skip the questions</button></div></div>`,
+
+  quiz: () => {
+    const { step, answers } = AuthUI.quiz, q = QUESTIONS[step];
+    const chosen = [].concat(answers[q.id] || []);
+    const focusOn = chosen.length ? chosen[0] : q.options[0][0]; // keyboard focus lands on the answer, or the first choice
+    return `<div class="quiz">${quizTop(step + 1)}
+      <div class="quiz-step"><h1>${q.title}</h1><p class="auth-sub">${q.sub}</p>
+      <div class="quiz-options${q.options[0][3] ? ' one' : ''}" role="${q.max ? 'group' : 'radiogroup'}">${q.options.map(([v, icon, label, desc], i) =>
+        `<button class="quiz-opt" style="--i:${i}" role="${q.max ? 'checkbox' : 'radio'}" aria-checked="${chosen.includes(v)}" data-action="quizPick" data-v="${v}"${v === focusOn ? ' autofocus' : ''}>
+          <span class="qo-icon">${icon}</span><span><b>${label}</b>${desc ? `<small>${desc}</small>` : ''}</span></button>`).join('')}</div>
+      ${q.max ? `<button class="btn primary block" data-action="quizNext" ${chosen.length ? '' : 'disabled'}>Continue</button>` : ''}</div></div>`;
+  },
+
+  commit: () => {
+    const a = AuthUI.quiz.answers;
+    const habits = HABIT_CHOICES.filter(h => a.habits.includes(h[0]));
+    return `<div class="quiz">${quizTop(QUESTIONS.length + 1)}
+      <div class="quiz-step"><h1>Your plan is ready</h1><p class="auth-sub">Here's how you'll start. You can change any of it later.</p>
+      <div class="plan-card">
+        <div><small>Your why</small><b>${answerLabel('why', a.why)}</b></div>
+        <div><small>Mode</small><b>${answerLabel('mode', a.mode)}</b></div>
+        <div><small>Most locked in</small><b>${answerLabel('peak', a.peak)}</b></div>
+        <div><small>Watch out for</small><b>${a.blockers.map(b => answerLabel('blockers', b)).join(', ')}</b></div>
+        <div class="plan-habits"><small>Your first habits</small><ul>${habits.map(([, icon, label]) => `<li>${icon} ${label}</li>`).join('')}</ul></div>
+      </div>
+      <p class="commit-text">“I'll show up every day, even when I don't feel like it.”</p>
+      <button class="btn primary block hold-btn" data-hold="commit" autofocus><i class="hold-fill"></i><span>Hold to commit</span></button>
+      <p class="muted center hold-hint">Press and hold the button</p></div></div>`;
+  },
 
   recover: () => `<form data-form="recover">
     <h1>Reset password</h1><p class="auth-sub">Use the recovery code you saved when you created your account.</p>
@@ -363,15 +462,95 @@ function renderAuth() {
   document.title = 'Sign in · HabitGrid';
   const accounts = Auth.list();
   if (AuthUI.mode === 'linkGoogle' && !(AuthUI.identity && Auth.byLogin(AuthUI.pick))) AuthUI.mode = null;
-  const mode = AuthUI.mode || (accounts.length ? 'pick' : 'register');
+  if ((AuthUI.mode === 'quiz' || AuthUI.mode === 'commit') && !AuthUI.quiz) AuthUI.mode = 'intro';
+  // Questions come first: a computer with no profiles starts with them, and so does "New profile".
+  const mode = AuthUI.mode || (accounts.length ? 'pick' : 'intro');
+  const flow = ['intro', 'quiz', 'commit', 'register'];
+  const steady = flow.includes(mode) && flow.includes(AuthUI.lastMode); // moving through the questions: no card bounce
+  AuthUI.lastMode = mode;
   $('#app').innerHTML = `<main class="auth">
-    <div class="auth-card${mode === 'register' ? ' wide' : ''}"><div class="auth-brand">${LOGO}<span>HabitGrid</span></div>${AUTH_VIEWS[mode](accounts)}</div>
+    <div class="auth-card${flow.includes(mode) ? ' wide' : ''}${steady ? ' steady' : ''}"><div class="auth-brand">${LOGO}<span>HabitGrid</span></div>${AUTH_VIEWS[mode](accounts)}</div>
     <p class="auth-foot">${I.lock} Profiles and habits are stored only on this computer, and passwords are salted and hashed (PBKDF2).
       ${googleOn() ? 'Google sign-in only tells HabitGrid your name and email.' : 'Nothing is sent anywhere.'}</p>
   </main>`;
   const f = $('.auth [autofocus]');
   if (f) f.focus();
 }
+
+const quizTop = n => `<div class="quiz-top"><button class="icon-btn" data-action="quizBack" aria-label="Back">${I.left}</button>
+  <div class="quiz-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${QUESTIONS.length + 1}" aria-valuenow="${n}"><i style="width:${(n / (QUESTIONS.length + 1)) * 100}%"></i></div>
+  <span class="muted quiz-count">${Math.min(n, QUESTIONS.length)}/${QUESTIONS.length}</span></div>`;
+
+function quizGo(step) {
+  const q = QUESTIONS[step];
+  // The habits question starts with suggestions from the goals.
+  if (q && q.id === 'habits' && !AuthUI.quiz.answers.habits) {
+    const picks = [];
+    for (const g of AuthUI.quiz.answers.goals || []) for (const h of GOAL_HABITS[g] || []) if (!picks.includes(h)) picks.push(h);
+    AuthUI.quiz.answers.habits = picks.slice(0, 4);
+  }
+  AuthUI.quiz.step = step;
+  AuthUI.mode = step >= QUESTIONS.length ? 'commit' : 'quiz';
+  renderAuth();
+}
+
+function commitPlan() {
+  AuthUI.plan = cleanPlan({ ...AuthUI.quiz.answers, committed: Dates.key(Dates.today()) });
+  AuthUI.mode = 'register';
+  celebrate();
+  renderAuth();
+}
+
+// A new profile starts from its answers: the chosen habits, and the plan shown on Today and Profile.
+function applyPlan(plan) {
+  if (!plan || !App.data) return;
+  App.data.plan = plan;
+  if (!App.data.habits.length) {
+    const key = Dates.key(Dates.today());
+    for (const [id, icon, name, color] of HABIT_CHOICES) {
+      if (plan.habits.includes(id)) App.data.habits.push({ id: Habits.newId(), name, icon, color, created: key });
+    }
+  }
+  save();
+  renderView(true);
+  checkBadges();
+}
+
+// "Hold to commit": the button fills while pressed (mouse, touch, or Space/Enter) and commits when full.
+let holdTimer = null;
+function startHold(el) {
+  if (holdTimer || el.classList.contains('held')) return;
+  el.classList.add('holding');
+  holdTimer = setTimeout(() => {
+    holdTimer = null;
+    el.classList.remove('holding');
+    el.classList.add('held');
+    if (el.dataset.hold === 'commit') commitPlan();
+  }, 1200);
+}
+function stopHold() {
+  if (!holdTimer) return;
+  clearTimeout(holdTimer);
+  holdTimer = null;
+  for (const el of $$('[data-hold].holding')) el.classList.remove('holding');
+}
+document.addEventListener('pointerdown', e => {
+  const el = e.target.closest('[data-hold]');
+  if (el && e.button === 0) { e.preventDefault(); startHold(el); }
+});
+document.addEventListener('pointerup', stopHold);
+document.addEventListener('pointercancel', stopHold);
+document.addEventListener('pointerout', e => {
+  const el = e.target.closest('[data-hold]');
+  if (el && !el.contains(e.relatedTarget)) stopHold();
+});
+document.addEventListener('keydown', e => {
+  const el = e.target.closest && e.target.closest('[data-hold]');
+  if (el && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); if (!e.repeat) startHold(el); }
+});
+document.addEventListener('keyup', e => {
+  if (e.target.closest && e.target.closest('[data-hold]') && (e.key === ' ' || e.key === 'Enter')) stopHold();
+});
 
 /* ---------- app shell ---------- */
 function enterApp(user) {
@@ -381,7 +560,7 @@ function enterApp(user) {
   const t = Dates.today();
   App.y = t.getFullYear();
   App.m = t.getMonth();
-  Object.assign(AuthUI, { mode: null, pick: null, code: null, next: null, reset: false, identity: null });
+  Object.assign(AuthUI, { mode: null, pick: null, code: null, next: null, reset: false, identity: null, quiz: null, plan: null, lastMode: null });
   applySettings();
   App.view = viewFromHash() || settings().startView;
   history.replaceState(null, '', '#/' + App.view);
@@ -595,7 +774,8 @@ function viewToday() {
     ${hs.length ? `<div class="inline-switch"><span>Hide completed</span>${switchBtn('hideDone', s.hideDone, 'Hide completed habits')}</div>` : ''}</header>`;
   if (!hs.length) return head + emptyState();
   const ds = Habits.dayStats(App.data, t);
-  const quote = QUOTES[Math.floor(t / 864e5) % QUOTES.length];
+  const why = App.data.plan && answerLabel('why', App.data.plan.why);
+  const quote = why ? `<span class="your-why">Your why</span> ${esc(why)}` : QUOTES[Math.floor(t / 864e5) % QUOTES.length];
   return head + `<section class="card today-hero">
       <div class="donut-ring">${Charts.ring(ds.pct || 0, { size: 132, stroke: 11 })}<div class="donut-txt"><b id="t-pct">${pct(ds.pct)}%</b><span id="t-count">${ds.done} of ${ds.total}</span></div></div>
       <div class="hero-text"><h2 id="t-msg">${todayMsg(ds)}</h2><p class="muted">${quote}</p></div>
@@ -712,7 +892,9 @@ function viewProfile() {
       <span class="avatar xl" style="--c:${u.color}">${esc(u.avatar)}</span>
       <div class="pc-info"><h2>${esc(u.displayName)}</h2><p class="muted">${esc(Auth.label(u))} · Member since ${MONTHS[since.getMonth()]} ${since.getFullYear()}</p>
         ${u.google ? `<p class="google-status">${GOOGLE_G}Connected to Google as ${esc(u.google.email)}</p>` : ''}
-        ${u.bio ? `<p class="bio">${esc(u.bio)}</p>` : ''}</div>
+        ${u.bio ? `<p class="bio">${esc(u.bio)}</p>` : ''}
+        ${App.data.plan && App.data.plan.mode ? `<p class="plan-tags"><span>${answerLabel('mode', App.data.plan.mode)} mode</span>${App.data.plan.peak
+          ? `<span>Most locked in: ${answerLabel('peak', App.data.plan.peak)}</span>` : ''}</p>` : ''}</div>
       <button class="btn" data-action="editProfile">${I.edit} Edit profile</button>
     </section>
     <section class="stats">${tile(st.total, 'Total check-ins')}${tile(st.current, 'Current streak')}${tile(st.best, 'Best streak')}${tile(st.perfect, 'Perfect days')}</section>
@@ -781,7 +963,7 @@ function sanitizeData(d) {
     for (const [id, mask] of Object.entries(row)) if (seen.has(id) && Number.isInteger(mask) && mask) (log[mk] ||= {})[id] = mask | 0;
   }
   const badges = Array.isArray(d.badges) ? d.badges.filter(b => BADGES.some(x => x.id === b)) : [];
-  return { v: 1, habits, log, settings: cleanSettings(d.settings), badges };
+  return { v: 1, habits, log, settings: cleanSettings(d.settings), badges, plan: cleanPlan(d.plan) };
 }
 
 async function importBackup() {
@@ -878,6 +1060,7 @@ const ACTIONS = {
   authMode(el) {
     AuthUI.mode = el.dataset.m;
     if (el.dataset.m === 'pick' || el.dataset.m === 'register') AuthUI.pick = null;
+    if (el.dataset.skip) AuthUI.plan = AuthUI.quiz = null;
     renderAuth();
   },
   pickProfile(el) { AuthUI.mode = 'login'; AuthUI.pick = el.dataset.u; renderAuth(); },
@@ -895,9 +1078,35 @@ const ACTIONS = {
     Auth.startSession(AuthUI.next, AuthUI.remember);
     const u = Auth.current();
     if (!u) return renderAuth();
-    const reset = AuthUI.reset;
+    const reset = AuthUI.reset, plan = AuthUI.plan;
     enterApp(u);
+    if (!reset) applyPlan(plan);
     toast(reset ? 'Password updated' : `Welcome, ${u.displayName}! 👋`);
+  },
+  quizStart() {
+    AuthUI.quiz = { step: 0, answers: {} };
+    AuthUI.plan = null;
+    quizGo(0);
+  },
+  quizPick(el) {
+    const q = QUESTIONS[AuthUI.quiz.step], answers = AuthUI.quiz.answers, v = el.dataset.v;
+    if (q.max) {
+      const list = answers[q.id] || (answers[q.id] = []);
+      if (list.includes(v)) list.splice(list.indexOf(v), 1);
+      else if (list.length >= q.max) return toast(`Pick up to ${q.max}`);
+      else list.push(v);
+      el.setAttribute('aria-checked', list.includes(v));
+      $('[data-action="quizNext"]').disabled = !list.length;
+      return;
+    }
+    answers[q.id] = v; // one answer: show it picked, then move on
+    for (const b of $$('.quiz-opt')) b.setAttribute('aria-checked', b === el);
+    setTimeout(() => { if (AuthUI.mode === 'quiz' && QUESTIONS[AuthUI.quiz.step] === q) quizGo(AuthUI.quiz.step + 1); }, 260);
+  },
+  quizNext() { quizGo(AuthUI.quiz.step + 1); },
+  quizBack() {
+    if (AuthUI.mode === 'quiz' && AuthUI.quiz.step === 0) { AuthUI.mode = 'intro'; return renderAuth(); }
+    quizGo(AuthUI.quiz.step - 1);
   },
   logout() {
     Auth.logout();
@@ -934,7 +1143,9 @@ const ACTIONS = {
       Object.assign(AuthUI, { mode: 'linkGoogle', pick: Auth.label(result.link), identity, remember });
       return renderAuth();
     }
+    const plan = AuthUI.plan;
     enterApp(result.user);
+    if (result.created) applyPlan(plan);
     toast(result.created ? `Welcome, ${result.user.displayName}! 👋` : `Welcome back, ${result.user.displayName} 👋`);
   },
   connectGoogle() {

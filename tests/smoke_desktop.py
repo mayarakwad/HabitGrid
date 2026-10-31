@@ -1,6 +1,6 @@
 """Opens the real HabitGrid window twice against a temporary data folder and drives it.
 
-First run: creates an email account, adds habits, ticks one, changes the theme, then goes
+First run: answers the first-run questions, creates an email account from them, ticks a habit, changes the theme, then goes
 through the Google account cases with stand-in Google identities (real Google sign-in needs
 the browser and an OAuth client). Checks data.json. Second run: checks everything came back
 from the file and the screens show the right sign-in options. The window opens off-screen.
@@ -25,6 +25,32 @@ window.__smoke = null;
   const fails = async (fn, text) => { try { await fn(); return 'did not fail'; } catch (e) { return e.message.includes(text) ? true : e.message; } };
   try {
     if (Store.backend !== 'desktop') throw new Error('storage backend is ' + Store.backend);
+    // Questions come before sign-up: answer them all by clicking, like a person would.
+    const wait = ms => new Promise(res => setTimeout(res, ms));
+    const tap = async (sel, ms = 120) => { const el = document.querySelector(sel); if (!el) throw new Error('missing ' + sel); el.click(); await wait(ms); };
+    r.questionsFirst = !!document.querySelector('[data-action="quizStart"]') && !document.querySelector('[data-form="register"]');
+    await tap('[data-action="quizStart"]');
+    await tap('.quiz-opt[data-v="fit"]'); await tap('.quiz-opt[data-v="learn"]'); await tap('[data-action="quizNext"]'); // goals
+    await tap('.quiz-opt[data-v="prove"]', 450);                                    // why (moves on by itself)
+    await tap('[data-action="quizBack"]');                                           // back...
+    r.backKeepsAnswer = document.querySelector('.quiz-opt[data-v="prove"]').getAttribute('aria-checked') === 'true';
+    await tap('.quiz-opt[data-v="prove"]', 450);                                    // ...and on again
+    await tap('.quiz-opt[data-v="week"]', 450);                                     // history
+    await tap('.quiz-opt[data-v="phone"]'); await tap('[data-action="quizNext"]');   // blockers
+    await tap('.quiz-opt[data-v="morning"]', 450);                                  // peak
+    r.habitsSuggested = $$('.quiz-opt[aria-checked="true"]').map(b => b.dataset.v).join() === 'workout,walk,water,read';
+    await tap('.quiz-opt[data-v="journal"]'); await tap('[data-action="quizNext"]'); // habits: 5
+    await tap('.quiz-opt[data-v="locked"]', 450);                                   // mode
+    r.commitShowsPlan = $$('.plan-habits li').length === 5;
+    const hold = document.querySelector('[data-hold="commit"]');
+    hold.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    await wait(300);
+    hold.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));            // let go too early: nothing happens
+    await wait(200);
+    r.shortHoldDoesNothing = AuthUI.mode === 'commit';
+    document.querySelector('[data-hold="commit"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    await wait(1500);
+    r.holdCommits = AuthUI.mode === 'register' && AuthUI.plan.habits.length === 5 && AuthUI.plan.mode === 'locked';
     r.googleButtonOnSignUp = !!document.querySelector('[data-form="register"] .btn.google');
     r.badEmail = await fails(() => Auth.register({ email: 'not-an-email', displayName: 'X', password: 'smoke-pass-1' }), 'valid email');
 
@@ -32,9 +58,14 @@ window.__smoke = null;
       password: 'smoke-pass-1', avatar: '🦊', color: '#2383e2' });
     r.codeLength = code.length;
     r.duplicateEmail = await fails(() => Auth.register({ email: 'smoke@example.com', displayName: 'Y', password: 'another-1' }), 'already has a profile');
-    Auth.startSession(user.id, true);
-    enterApp(Auth.current());
-    ACTIONS.starter();
+    AuthUI.next = user.id; AuthUI.remember = true;
+    ACTIONS.enter(); // what "Continue" does after the recovery code screen
+    r.planHabits = App.data.habits.map(h => h.name).join('|') === 'Work out|Walk 8,000 steps|Drink 2 liters of water|Read 10 pages|Journal'
+      || App.data.habits.map(h => h.name).join('|');
+    r.planSaved = App.data.plan && App.data.plan.why === 'prove';
+    location.hash = '#/today';
+    await wait(300);
+    r.todayShowsWhy = (document.querySelector('.hero-text .muted') || {}).textContent === 'Your why I want to prove it to myself';
     setDone(App.data.habits[0].id, Dates.today(), true);
     updateSetting('theme', 'forest');
     r.loginByEmail = (await Auth.login('SMOKE@example.com', 'smoke-pass-1', true)).id === user.id;
@@ -126,8 +157,12 @@ window.__smoke = null;
   await new Promise(res => setTimeout(res, 300));
   r.profileOffersConnectGoogle = !!document.querySelector('[data-action="connectGoogle"]');
   r.profileShowsEmail = document.querySelector('.pc-info').textContent.includes('smoke@example.com');
+  r.profileShowsPlan = (document.querySelector('.plan-tags') || {}).textContent === 'Locked in modeMost locked in: Morning';
   ACTIONS.logout();
   r.pickTiles = document.querySelectorAll('.profile-tile:not(.add)').length;
+  document.querySelector('.profile-tile.add').click();
+  r.newProfileAsksQuestionsFirst = !!document.querySelector('[data-action="quizStart"]');
+  AuthUI.mode = 'pick'; renderAuth();
   r.pickOffersGoogle = document.querySelector('.auth-links [data-m="login"]').textContent.includes('Google');
   AuthUI.pick = 'gia@gmail.com'; AuthUI.mode = 'login'; renderAuth();
   r.googleOnlyGetsPasswordForm = !!document.querySelector('[data-form="login"]'); // Gia added a password
@@ -271,9 +306,13 @@ def main():
                 failures.append("smoke profile: expected a password and no Google link")
             if (users["gia@gmail.com"].get("google") or {}).get("sub") != "g-1" or "hash" not in users["gia@gmail.com"]:
                 failures.append("Google profile: expected Google link g-1 and an added password")
-            habits = data.get("hg.data." + users["smoke@example.com"]["id"], {}).get("habits", [])
+            saved = data.get("hg.data." + users["smoke@example.com"]["id"], {})
+            habits = saved.get("habits", [])
             if len(habits) != 5:
                 failures.append(f"data.json has {len(habits)} habits")
+            plan = saved.get("plan") or {}
+            if plan.get("goals") != ["fit", "learn"] or plan.get("mode") != "locked" or not plan.get("committed"):
+                failures.append(f"data.json plan: {plan!r}")
         if data.get("hg.look", {}).get("theme") != "forest":
             failures.append("theme not saved")
 
@@ -285,7 +324,8 @@ def main():
                     "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True,
                     "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
                     "pageInertBehindDialog": True, "pageBackAfterDialog": True,
-                    "version": "1.1.2"}
+                    "profileShowsPlan": True, "newProfileAsksQuestionsFirst": True,
+                    "version": "1.1.3"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")
