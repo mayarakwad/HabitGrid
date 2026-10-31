@@ -134,6 +134,23 @@ window.__smoke = null;
   AuthUI.pick = 'solo@gmail.com'; AuthUI.mode = 'login'; renderAuth();
   r.googleOnlyHasKeepSignedIn = !!document.querySelector('.auth-card input[name="remember"]') && !!document.querySelector('.btn.google')
     && !document.querySelector('[data-form="login"]');
+  // "Continue with Google" on Solo's screen, with Google's answer faked (no browser): another
+  // account must not open or create a profile; Solo's own account signs in.
+  const realSignIn = Store.api.google_sign_in;
+  let hint = 'unset', answer = { sub: 'g-99', email: 'dad@gmail.com', name: 'Dad' };
+  Store.api.google_sign_in = h => { hint = h; return Promise.resolve(answer); };
+  const tapGoogle = async () => { document.querySelector('.btn.google').click(); await new Promise(res => setTimeout(res, 400)); };
+  AuthUI.pick = 'solo@gmail.com'; AuthUI.mode = 'login'; renderAuth();
+  await tapGoogle();
+  r.pickedPreselectsAccount = hint === 'solo@gmail.com';
+  r.pickedRejectsOtherAccount = !App.user && !Auth.byLogin('dad@gmail.com')
+    && document.querySelector('#modal-root h2').textContent.includes('different Google account');
+  closeModal(true);
+  answer = { sub: 'g-4', email: 'solo@gmail.com', name: 'Solo' };
+  await tapGoogle();
+  r.pickedSignsInWithOwnAccount = !!App.user && App.user.email === 'solo@gmail.com';
+  Store.api.google_sign_in = realSignIn;
+  ACTIONS.logout();
   AuthUI.pick = null; AuthUI.mode = 'login'; renderAuth();
   r.loginHasGoogleAndEmail = !!document.querySelector('.btn.google') && !!document.querySelector('input[name="login"]');
   r.ok = true;
@@ -260,7 +277,9 @@ def main():
         expected = {"ok": True, "backend": "desktop", "user": "smoke@example.com", "label": "smoke@example.com",
                     "habits": 5, "done": 1, "theme": "forest", "booted": True, "google": True,
                     "profileOffersConnectGoogle": True, "profileShowsEmail": True, "pickTiles": 4, "pickOffersGoogle": True,
-                    "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True}
+                    "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True,
+                    "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
+                    "version": "1.1.1"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

@@ -132,6 +132,18 @@ class SignInTest(unittest.TestCase):
         challenge = base64.urlsafe_b64encode(hashlib.sha256(sent["code_verifier"].encode()).digest()).rstrip(b"=").decode()
         self.assertEqual(challenge, p["code_challenge"])
 
+    def test_preselects_an_account_when_asked(self):
+        def google(params):
+            visit(params["redirect_uri"] + "?" + urllib.parse.urlencode({"code": "c", "state": params["state"]}))
+
+        self.make(google).run()
+        self.assertNotIn("login_hint", self.auth_url)
+        signin = self.make(google)
+        signin.login_hint = "mom@gmail.com"
+        signin.run()
+        self.assertEqual(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.auth_url).query))["login_hint"], "mom@gmail.com")
+        self.assertFalse(signin.cancelled)
+
     def test_declined_in_browser(self):
         signin = self.make(lambda p: visit(p["redirect_uri"] + "?" + urllib.parse.urlencode({"error": "access_denied", "state": p["state"]})))
         with self.assertRaises(Cancelled):

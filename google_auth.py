@@ -91,8 +91,9 @@ def identity_from_id_token(id_token, client_id, now=None):
 class SignIn:
     """One sign-in attempt. run() blocks until it finishes; cancel() ends it from another thread."""
 
-    def __init__(self, client, open_browser=webbrowser.open, urlopen=urllib.request.urlopen, timeout=300):
+    def __init__(self, client, open_browser=webbrowser.open, urlopen=urllib.request.urlopen, timeout=300, login_hint=None):
         self.client = client
+        self.login_hint = login_hint  # an email: Google preselects that account
         self._open_browser = open_browser
         self._urlopen = urlopen
         self._timeout = timeout
@@ -105,6 +106,11 @@ class SignIn:
         self._cancelled = True
         self._finished.set()
 
+    @property
+    def cancelled(self):
+        """True if cancel() was called (by the app), not if Google's page was declined."""
+        return self._cancelled
+
     def run(self):
         verifier = secrets.token_urlsafe(64)
         state = secrets.token_urlsafe(24)
@@ -113,7 +119,7 @@ class SignIn:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), self._handler(state))
         server.daemon_threads = True
         redirect_uri = f"http://127.0.0.1:{server.server_port}/"
-        url = AUTH_URL + "?" + urllib.parse.urlencode({
+        params = {
             "client_id": self.client["client_id"],
             "redirect_uri": redirect_uri,
             "response_type": "code",
@@ -122,7 +128,10 @@ class SignIn:
             "code_challenge": _b64url(hashlib.sha256(verifier.encode("ascii")).digest()),
             "code_challenge_method": "S256",
             "prompt": "select_account",
-        })
+        }
+        if self.login_hint:
+            params["login_hint"] = self.login_hint
+        url = AUTH_URL + "?" + urllib.parse.urlencode(params)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True)
         thread.start()
         try:

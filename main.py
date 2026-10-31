@@ -11,7 +11,7 @@ import google_auth
 from storage import DataFile
 
 APP = "HabitGrid"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 # Bundled files live next to this script, or in PyInstaller's unpack folder.
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
@@ -136,18 +136,25 @@ def _raise_window(hwnd):
     user32.SetWindowPos(hwnd, wintypes.HWND(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
 
 
-def _find_app_window():
-    """The visible HabitGrid window (pywebview's WinForms form), or None.
+def _find_app_window(pid=None):
+    """The visible HabitGrid window (pywebview's WinForms form), or None. With pid, only
+    that process's window.
 
     Matching the window class too skips, say, an Explorer window on a folder named HabitGrid.
     """
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.WinDLL("user32")
+    user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
     found = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def check(hwnd, _):
+        if pid is not None:
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value != pid:
+                return True
         title, cls = ctypes.create_unicode_buffer(64), ctypes.create_unicode_buffer(128)
         user32.GetWindowTextW(hwnd, title, 64)
         user32.GetClassNameW(hwnd, cls, 128)
@@ -178,23 +185,32 @@ class Api:
     def info(self):
         return {"version": VERSION, "dataFile": str(self._store.path), "google": self._google_client is not None}
 
-    def google_sign_in(self):
-        """Signs in with Google in the system browser. Returns {sub, email, name}; raises if not."""
+    def google_sign_in(self, login_hint=None):
+        """Signs in with Google in the system browser. Returns {sub, email, name}; raises if not.
+
+        login_hint, an email, makes Google preselect that account.
+        """
         if not self._google_client:
             raise google_auth.GoogleSignInError("Google sign-in isn't set up in this copy of HabitGrid.")
-        if self._signin:
-            self._signin.cancel()  # a new attempt replaces an abandoned one
-        signin = self._signin = google_auth.SignIn(self._google_client)
+        previous = self._signin  # read once: another call thread may change it
+        if previous:
+            previous.cancel()  # a new attempt replaces an abandoned one
+        signin = self._signin = google_auth.SignIn(self._google_client, login_hint=str(login_hint) if login_hint else None)
         try:
             return signin.run()
         finally:
             if self._signin is signin:
                 self._signin = None
-            self._bring_to_front()  # also after a failure, so its message isn't hidden behind the browser
+            # Come forward when the attempt ended by itself (success, error, declined at Google),
+            # so its result isn't hidden behind the browser. Not when the app cancelled it or a
+            # newer attempt replaced it: that could pull HabitGrid over whatever is in use now.
+            if not signin.cancelled:
+                self._bring_to_front()
 
     def google_cancel(self):
-        if self._signin:
-            self._signin.cancel()
+        signin = self._signin  # read once: the attempt may finish meanwhile
+        if signin:
+            signin.cancel()
 
     def _bring_to_front(self):
         """After the browser, puts HabitGrid back in front. Runs on a pywebview call thread."""
@@ -203,7 +219,7 @@ class Api:
                 # Plain Win32 calls through ctypes, not pywebview: on Windows its window.on_top
                 # sets the form's TopMost from this thread while holding Python's lock, which can
                 # deadlock with the window's own thread. Its window.restore() also un-maximizes.
-                hwnd = _find_app_window()
+                hwnd = _find_app_window(pid=os.getpid())  # this copy's window, not another copy's
                 if hwnd:
                     _focus_window(hwnd)
                     _raise_window(hwnd)  # in case Windows refused the focus change

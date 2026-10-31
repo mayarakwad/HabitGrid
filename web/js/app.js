@@ -910,8 +910,15 @@ const ACTIONS = {
     const screen = el.closest('form') || el.closest('.auth-card');
     const box = screen && screen.querySelector('input[name="remember"]');
     const remember = box ? box.checked : true;
-    const identity = await googleIdentity();
+    // On a chosen profile's screen ("Hi, Mom"), only that profile's Google account signs in:
+    // picking another account in Google's chooser mustn't open or create a different profile.
+    const picked = AuthUI.mode === 'login' && AuthUI.pick ? Auth.byLogin(AuthUI.pick) : null;
+    const identity = await googleIdentity(picked && picked.google ? picked.google.email : null);
     if (!identity) return;
+    if (picked && picked.google && !Auth.verifyGoogle(picked.id, identity)) {
+      return showMessage("That's a different Google account",
+        `${Auth.label(picked)} signs in with ${picked.google.email}. Choose that account in Google, or go back to all profiles to use another one.`);
+    }
     let result;
     try {
       result = Auth.googleSignIn(identity, { avatar: pickRandom(AVATARS), color: pickRandom(ACCENTS) }, remember);
@@ -941,9 +948,9 @@ const ACTIONS = {
       <div class="modal-foot"><span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn danger solid">Disconnect</button></div></form>`);
   },
   async deleteWithGoogle() {
-    const identity = await googleIdentity();
+    const identity = await googleIdentity(App.user.google && App.user.google.email);
     if (!identity) return;
-    if (!Auth.verifyGoogle(App.user.id, identity)) return toast('That was a different Google account.');
+    if (!Auth.verifyGoogle(App.user.id, identity)) return showMessage("That's a different Google account", `Confirm with ${App.user.google.email}.`);
     deleteCurrentAccount();
   },
 
@@ -1122,9 +1129,9 @@ const FORMS = {
   async setPassword(f, fd) {
     if (fd.get('next') !== fd.get('confirm')) throw new Error("Passwords don't match.");
     if (String(fd.get('next')).length < 6) throw new Error('Password must be at least 6 characters.');
-    const identity = await googleIdentity(); // replaces this dialog while it waits
+    const identity = await googleIdentity(App.user.google && App.user.google.email); // replaces this dialog while it waits
     if (!identity) return;
-    if (!Auth.verifyGoogle(App.user.id, identity)) return toast('That was a different Google account.');
+    if (!Auth.verifyGoogle(App.user.id, identity)) return showMessage("That's a different Google account", `Confirm with ${App.user.google.email}.`);
     const code = await Auth.addPassword(App.user.id, fd.get('next'));
     App.user = Auth.current();
     renderView(false);
@@ -1197,9 +1204,16 @@ function deleteCurrentAccount() {
   toast(`Account “${name}” deleted`);
 }
 
+// A dialog that stays until dismissed (a toast is easy to miss after coming back from the browser).
+function showMessage(title, text) {
+  openModal(`<div class="modal-head"><h2>${esc(title)}</h2>${closeBtn}</div><p class="muted">${esc(text)}</p>
+    <div class="modal-foot"><span class="grow"></span><button class="btn primary" data-action="closeModal" autofocus>OK</button></div>`);
+}
+
 /* Google sign-in runs in the system browser (main.py); this shows a waiting dialog meanwhile.
+   hint, an email, makes Google preselect that account.
    Resolves to {sub, email, name}, or null if it was cancelled or failed (after saying why). */
-async function googleIdentity() {
+async function googleIdentity(hint) {
   if (!googleOn() || !Store.api) {
     toast("Google sign-in isn't available in this copy of HabitGrid");
     return null;
@@ -1213,7 +1227,7 @@ async function googleIdentity() {
   // ends the wait at once; whatever Google answers later for this attempt is ignored.
   const wait = App.googleWait = {};
   const cancelled = new Promise(resolve => { wait.cancel = resolve; });
-  const call = Store.api.google_sign_in();
+  const call = Store.api.google_sign_in(hint || null);
   call.catch(() => {}); // a late failure after a cancel is expected, not an error
   let error = null;
   try {
@@ -1226,10 +1240,7 @@ async function googleIdentity() {
     if (App.googleWait === wait) { // still this attempt's dialog
       App.googleWait = null;
       closeModal(true);
-      if (error) {
-        openModal(`<div class="modal-head"><h2>Google sign-in didn't finish</h2>${closeBtn}</div><p class="muted">${esc(error)}</p>
-          <div class="modal-foot"><span class="grow"></span><button class="btn primary" data-action="closeModal" autofocus>OK</button></div>`);
-      }
+      if (error) showMessage("Google sign-in didn't finish", error);
     }
   }
 }

@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -86,7 +87,9 @@ class MainTest(unittest.TestCase):
 
     def test_google_failure_still_brings_the_app_forward(self):
         class FailingSignIn:
-            def __init__(self, client):
+            cancelled = False
+
+            def __init__(self, client, login_hint=None):
                 pass
 
             def run(self):
@@ -98,6 +101,78 @@ class MainTest(unittest.TestCase):
                 api.google_sign_in()
         front.assert_called_once()
 
+    def test_cancelled_or_replaced_sign_in_stays_in_the_background(self):
+        # Such an attempt can finish late (a slow exchange); coming forward then would cover
+        # whatever the person is using now, such as the browser of a newer attempt.
+        class SlowSignIn:
+            def __init__(self, client, login_hint=None):
+                self.cancelled = False
+                self.started, self.finish = threading.Event(), threading.Event()
+
+            def cancel(self):
+                self.cancelled = True
+                self.finish.set()
+
+            def run(self):
+                self.started.set()
+                self.finish.wait(5)
+                raise google_auth.Cancelled("Google sign-in was cancelled.")
+
+        api = main.Api(DataFile("."), {"client_id": "x", "client_secret": "y"})
+        outcomes = []
+
+        def attempt():  # one pywebview call thread
+            try:
+                api.google_sign_in()
+            except google_auth.Cancelled:
+                outcomes.append("cancelled")
+
+        def start_attempt():
+            before = api._signin
+            thread = threading.Thread(target=attempt)
+            thread.start()
+            deadline = time.monotonic() + 5
+            while (api._signin is None or api._signin is before) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            api._signin.started.wait(5)
+            return thread, api._signin
+
+        with mock.patch.object(google_auth, "SignIn", SlowSignIn), mock.patch.object(api, "_bring_to_front") as front:
+            first, _ = start_attempt()
+            api.google_cancel()  # Cancel in HabitGrid's dialog
+            first.join(5)
+            old, old_signin = start_attempt()
+            new, _ = start_attempt()  # "Continue with Google" again replaces the old attempt
+            old.join(5)
+            self.assertTrue(old_signin.cancelled)
+            api.google_cancel()
+            new.join(5)
+        self.assertEqual(outcomes, ["cancelled"] * 3)
+        front.assert_not_called()
+
+    def test_google_sign_in_passes_the_preselected_account(self):
+        seen = {}
+
+        class RecordingSignIn:
+            cancelled = False
+
+            def __init__(self, client, login_hint=None):
+                seen["hint"] = login_hint
+
+            def run(self):
+                return {"sub": "1", "email": "mom@gmail.com", "name": "Mom"}
+
+        api = main.Api(DataFile("."), {"client_id": "x", "client_secret": "y"})
+        with mock.patch.object(google_auth, "SignIn", RecordingSignIn), mock.patch.object(api, "_bring_to_front"):
+            api.google_sign_in("mom@gmail.com")
+            self.assertEqual(seen["hint"], "mom@gmail.com")
+            api.google_sign_in(None)  # what the page sends when no account is preselected
+            self.assertIsNone(seen["hint"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_find_app_window_can_be_limited_to_one_process(self):
+        self.assertIsNone(main._find_app_window(pid=0xFFFFFFF0))  # no such process
+
     def test_api_exposes_no_private_state(self):
         # pywebview shares every public attribute of the Api with the page.
         public = [name for name in vars(main.Api(DataFile("."))) if not name.startswith("_")]
@@ -105,7 +180,8 @@ class MainTest(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "Windows only")
     def test_single_instance_per_data_folder(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        # No real windows: a HabitGrid that happens to be open on this PC must not be found or focused.
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(main, "_find_app_window", return_value=None):
             first = Path(tmp) / "a"
             self.assertIs(main.claim_single_instance(first, wait=0), True)
             held = main._instance_mutex
