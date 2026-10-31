@@ -178,6 +178,7 @@ function openModal(html, { wide = false } = {}) {
   root.innerHTML = `<div class="backdrop" data-action="closeModal"></div><div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true">${html}</div>`;
   root.hidden = false;
   root.classList.remove('closing');
+  $('#app').inert = true; // the page behind a dialog can't be clicked or reached with the keyboard
   const first = $('[autofocus]', root) || $('.modal input, .modal button:not([data-action="closeModal"])', root);
   if (first) first.focus();
 }
@@ -195,6 +196,7 @@ function closeModal(immediate) {
   const seq = ++App.modalSeq;
   const finish = () => {
     if (seq !== App.modalSeq) return;
+    $('#app').inert = false;
     root.hidden = true;
     root.innerHTML = '';
     root.classList.remove('closing');
@@ -913,8 +915,11 @@ const ACTIONS = {
     // On a chosen profile's screen ("Hi, Mom"), only that profile's Google account signs in:
     // picking another account in Google's chooser mustn't open or create a different profile.
     const picked = AuthUI.mode === 'login' && AuthUI.pick ? Auth.byLogin(AuthUI.pick) : null;
+    const screenBefore = { mode: AuthUI.mode, pick: AuthUI.pick };
     const identity = await googleIdentity(picked && picked.google ? picked.google.email : null);
     if (!identity) return;
+    // The answer belongs to the screen it was asked from (the dialog blocks the page meanwhile).
+    if (App.user || AuthUI.mode !== screenBefore.mode || AuthUI.pick !== screenBefore.pick) return;
     if (picked && picked.google && !Auth.verifyGoogle(picked.id, identity)) {
       return showMessage("That's a different Google account",
         `${Auth.label(picked)} signs in with ${picked.google.email}. Choose that account in Google, or go back to all profiles to use another one.`);
@@ -923,7 +928,7 @@ const ACTIONS = {
     try {
       result = Auth.googleSignIn(identity, { avatar: pickRandom(AVATARS), color: pickRandom(ACCENTS) }, remember);
     } catch (err) {
-      return toast(err.message);
+      return showMessage("Couldn't sign in with Google", err.message);
     }
     if (result.link) {
       Object.assign(AuthUI, { mode: 'linkGoogle', pick: Auth.label(result.link), identity, remember });
@@ -1121,7 +1126,7 @@ const FORMS = {
     try {
       App.user = await Auth.connectGoogle(App.user.id, identity, password);
     } catch (err) {
-      return toast(err.message);
+      return showMessage("Couldn't connect Google", err.message);
     }
     renderView(false);
     toast('Google connected: you can now sign in with it too');

@@ -150,6 +150,11 @@ window.__smoke = null;
   await tapGoogle();
   r.pickedSignsInWithOwnAccount = !!App.user && App.user.email === 'solo@gmail.com';
   Store.api.google_sign_in = realSignIn;
+  // While a dialog is open the page behind it can't be clicked or tabbed into.
+  showMessage('Test', 'Dialog');
+  r.pageInertBehindDialog = $('#app').inert === true;
+  closeModal(true);
+  r.pageBackAfterDialog = $('#app').inert === false;
   ACTIONS.logout();
   AuthUI.pick = null; AuthUI.mode = 'login'; renderAuth();
   r.loginHasGoogleAndEmail = !!document.querySelector('.btn.google') && !!document.querySelector('input[name="login"]');
@@ -279,6 +284,7 @@ def main():
                     "profileOffersConnectGoogle": True, "profileShowsEmail": True, "pickTiles": 4, "pickOffersGoogle": True,
                     "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True,
                     "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
+                    "pageInertBehindDialog": True, "pageBackAfterDialog": True,
                     "version": "1.1.1"}
         for key, value in expected.items():
             if second.get(key) != value:
