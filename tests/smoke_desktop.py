@@ -285,7 +285,7 @@ def main():
                     "googleOnlyGetsPasswordForm": True, "googleOnlyHasKeepSignedIn": True, "loginHasGoogleAndEmail": True,
                     "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
                     "pageInertBehindDialog": True, "pageBackAfterDialog": True,
-                    "version": "1.1.1"}
+                    "version": "1.1.2"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

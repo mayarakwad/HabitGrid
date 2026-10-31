@@ -37,8 +37,18 @@ jobs:
         env:
           GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
         run: |
-          if ($env:GOOGLE_CLIENT_JSON) { Set-Content google_client.json $env:GOOGLE_CLIENT_JSON -Encoding utf8; 'Google sign-in: on' }
-          else { 'Google sign-in: off (no GOOGLE_CLIENT_JSON secret)' }
+          # Reported as an annotation (visible on the run page) without ever printing the secret.
+          if (-not $env:GOOGLE_CLIENT_JSON) {
+            '::warning title=Google sign-in: off::No repository secret named GOOGLE_CLIENT_JSON, so this build has no Google sign-in.'
+            exit 0
+          }
+          Set-Content google_client.json $env:GOOGLE_CLIENT_JSON -Encoding utf8
+          $ok = .venv\Scripts\python -c "import google_auth; print('yes' if google_auth.load_client('google_client.json', env={}) else 'no')"
+          if ($ok -eq 'yes') { '::notice title=Google sign-in: on::GOOGLE_CLIENT_JSON is a valid OAuth client and is built into this app.' }
+          else {
+            Remove-Item google_client.json
+            '::warning title=Google sign-in: off::GOOGLE_CLIENT_JSON is set but is not the JSON file of a Google Cloud Desktop app OAuth client (it needs client_id and client_secret).'
+          }
 
       - name: Get Inno Setup
         shell: pwsh
