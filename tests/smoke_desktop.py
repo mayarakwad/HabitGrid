@@ -174,6 +174,107 @@ window.__smoke = null;
   r.profileOffersConnectGoogle = !!document.querySelector('[data-action="connectGoogle"]');
   r.profileShowsEmail = document.querySelector('.pc-info').textContent.includes('smoke@example.com');
   r.profileShowsPlan = (document.querySelector('.plan-tags') || {}).textContent === 'Locked in modeMost locked in: Morning';
+
+  // Grids, Week and Year.
+  const wait = ms => new Promise(res => setTimeout(res, ms));
+  const go = async v => { location.hash = '#/' + v; await wait(250); };
+  const submit = async (sel, fields) => {
+    const form = document.querySelector(sel);
+    for (const [k, v] of Object.entries(fields)) form.elements[k].value = v;
+    form.requestSubmit();
+    await wait(300);
+  };
+  const today = Dates.today(), todayKey = Dates.key(today), h0 = App.data.habits[0], h1 = App.data.habits[1];
+  r.oldHabitsInFirstGrid = App.data.grids.length === 1 && App.data.habits.every(h => h.grid === App.data.grids[0].id);
+  await go('week');
+  r.weekShowsHabits = document.querySelectorAll('.week-grid tbody tr').length === 5
+    && document.querySelector(`.week-grid .cb[data-h="${h0.id}"][data-date="${todayKey}"]`).getAttribute('aria-pressed') === 'true';
+  const before = document.querySelector('#week-total').textContent;
+  document.querySelector(`.week-grid .cb[data-h="${h1.id}"][data-date="${todayKey}"]`).click();
+  await wait(100);
+  r.weekTicks = Habits.isDone(App.data, h1.id, today) && document.querySelector('#week-total').textContent !== before;
+  document.querySelector(`.week-grid .cb[data-h="${h1.id}"][data-date="${todayKey}"]`).click(); // back as it was
+  await wait(100);
+  const title = document.querySelector('.month-title').textContent;
+  document.querySelector('[data-action="week"][data-d="-1"]').click();
+  await wait(100);
+  r.weekGoesBack = document.querySelector('.month-title').textContent !== title && !!document.querySelector('[data-action="week"][data-d="0"]')
+    && document.activeElement.matches('[data-action="week"][data-d="-1"]'); // focus stays on the button
+  document.querySelector('[data-action="week"][data-d="0"]').click();
+  await go('year');
+  const doy = Math.round((today - new Date(today.getFullYear(), 0, 1)) / 864e5) + 1;
+  r.yearHasEveryDay = document.querySelectorAll('.heat .yd[data-date]').length === doy && !!document.querySelector('.heat .yd.today[tabindex="0"]');
+  r.yearChips = document.querySelectorAll('.chips .chip').length === 6;
+  document.querySelector(`.chip[data-h="${h0.id}"]`).click();
+  r.yearOneHabit = App.yearHabit === h0.id && (document.querySelector('.heat').getAttribute('style') || '').includes('--heat');
+  if (doy > 1) {
+    const cell = document.querySelector('.heat .yd.today');
+    cell.focus();
+    cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    const y = new Date(today); y.setDate(y.getDate() - 1);
+    r.yearArrowKeys = document.activeElement.dataset.date === Dates.key(y);
+    // Ticking a habit in that day's window keeps the year's scroll and returns focus to the day.
+    document.querySelector('#year-body').style.width = '300px'; // narrow, so the year scrolls sideways
+    const wrap = document.querySelector('.heat-wrap');
+    wrap.scrollLeft = 120;
+    const left = wrap.scrollLeft;
+    document.activeElement.click();
+    await wait(200);
+    document.querySelector('#modal-root .focus-item').click();
+    await wait(100);
+    document.querySelector('#modal-root .focus-item').click(); // and back
+    await wait(100);
+    document.querySelector('#modal-root .modal-foot [data-action="closeModal"]').click();
+    await wait(400);
+    // Not back at January: the day you were on is still in view (focusing it may scroll a little).
+    const box = document.querySelector('.heat-wrap').getBoundingClientRect(), at = document.activeElement.getBoundingClientRect();
+    r.yearKeepsPlace = left > 0 && document.querySelector('.heat-wrap').scrollLeft > 0 && document.activeElement.dataset.date === Dates.key(y)
+      && document.activeElement.tabIndex === 0 && at.left >= box.left && at.right <= box.right;
+    document.querySelector('#year-body').style.width = '';
+  } else { r.yearArrowKeys = true; r.yearKeepsPlace = true; }
+
+  // A new grid with its own habit; Today groups habits by grid.
+  await go('tracker');
+  ACTIONS.newGrid();
+  await submit('[data-form="grid"]', { name: '<b>Work</b>', icon: '💼' });
+  const work = currentGrid();
+  r.gridCreated = App.data.grids.length === 2 && work.name === '<b>Work</b>' && !!document.querySelector('.grid-tab[aria-pressed="true"]')
+    && document.querySelector('.grid-tab[aria-pressed="true"]').innerHTML.includes('&lt;b&gt;Work') && !document.querySelector('.grid-tab b');
+  r.newGridEmpty = !document.querySelector('.grid tbody') && document.querySelector('.empty h2').textContent.includes('has no habits yet');
+  ACTIONS.newHabit();
+  await submit('[data-form="habit"]', { name: 'Deep work' });
+  r.habitGoesToCurrentGrid = gridHabits().length === 1 && gridHabits()[0].name === 'Deep work' && document.querySelectorAll('.grid tbody tr').length === 1;
+  document.querySelector(`.grid-tab[data-g="${App.data.grids[0].id}"]`).click();
+  await wait(100);
+  r.switchGrid = document.querySelectorAll('.grid tbody tr').length === 5 && document.activeElement.dataset.g === App.data.grids[0].id;
+  // Moving a habit to another grid from Edit habit.
+  ACTIONS.editHabit({ dataset: { h: h1.id } });
+  await submit('[data-form="habit"]', { name: h1.name, grid: work.id });
+  r.moveHabitToGrid = habitById(h1.id).grid === work.id && document.querySelectorAll('.grid tbody tr').length === 4;
+  await go('today');
+  r.todayGroupsByGrid = document.querySelectorAll('#focus .focus-group').length === 2 && document.querySelectorAll('#focus .focus-item').length === 6;
+  // Deleting a grid deletes its habits (after a confirm).
+  App.data.gridId = work.id;
+  ACTIONS.editGrid();
+  // Cancel in the confirmation goes back to Edit grid with what was typed.
+  document.querySelector('[data-form="grid"]').elements.name.value = 'Typed';
+  document.querySelector('[data-form="grid"] [data-action="deleteGrid"]').click();
+  await wait(100);
+  document.querySelector('#modal-root [data-action="closeModal"]').click();
+  await wait(400);
+  r.deleteCancelKeepsEdit = !!document.querySelector('[data-form="grid"]') && document.querySelector('[data-form="grid"]').elements.name.value === 'Typed'
+    && App.data.grids.length === 2;
+  document.querySelector('[data-form="grid"] [data-action="deleteGrid"]').click();
+  await wait(100);
+  document.querySelector('[data-action="confirmYes"]').click();
+  await wait(200);
+  r.deleteGrid = App.data.grids.length === 1 && App.data.habits.length === 4 && !habitById(h1.id);
+  // Backups keep grids; bad grid data falls back to one grid.
+  const kept = sanitizeData({ habits: [{ id: 'a1', name: 'A', grid: 'w1' }, { id: 'a2', name: 'B', grid: 'nope' }], log: {},
+    grids: [{ id: 'm1', name: 'M' }, { id: 'w1', name: 'W', icon: '💼' }, { id: 'bad id!', name: 'X' }], gridId: 'w1' });
+  const lost = sanitizeData({ habits: [{ id: 'a1', name: 'A', grid: 'w1' }], log: {}, grids: 'junk' });
+  r.backupKeepsGrids = kept.grids.length === 2 && kept.gridId === 'w1' && kept.habits[0].grid === 'w1' && kept.habits[1].grid === 'm1'
+    && lost.grids.length === 1 && lost.habits[0].grid === lost.grids[0].id;
   ACTIONS.logout();
   r.pickTiles = document.querySelectorAll('.profile-tile:not(.add)').length;
   document.querySelector('.profile-tile.add').click();
@@ -350,7 +451,12 @@ def main():
                     "pickedPreselectsAccount": True, "pickedRejectsOtherAccount": True, "pickedSignsInWithOwnAccount": True,
                     "pageInertBehindDialog": True, "pageBackAfterDialog": True,
                     "profileShowsPlan": True, "newProfileAsksQuestionsFirst": True, "abandonedPlanDropped": True,
-                    "version": "1.1.4"}
+                    "oldHabitsInFirstGrid": True, "weekShowsHabits": True, "weekTicks": True, "weekGoesBack": True,
+                    "yearHasEveryDay": True, "yearChips": True, "yearOneHabit": True, "yearArrowKeys": True, "yearKeepsPlace": True,
+                    "deleteCancelKeepsEdit": True,
+                    "gridCreated": True, "newGridEmpty": True, "habitGoesToCurrentGrid": True, "switchGrid": True,
+                    "moveHabitToGrid": True, "todayGroupsByGrid": True, "deleteGrid": True, "backupKeepsGrids": True,
+                    "version": "1.2.0"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

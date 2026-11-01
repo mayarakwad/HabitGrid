@@ -38,6 +38,8 @@ const I = {
   copy: ic('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
   lock: ic('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
   broom: ic('<path d="M14 4l6 6M17 7l-7 7M4 20l5-1 5-5-4-4-5 5z"/>'),
+  week: ic('<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/>'),
+  year: ic('<rect x="3" y="3" width="4" height="4" rx="1"/><rect x="10" y="3" width="4" height="4" rx="1"/><rect x="17" y="3" width="4" height="4" rx="1"/><rect x="3" y="10" width="4" height="4" rx="1"/><rect x="10" y="10" width="4" height="4" rx="1"/><rect x="17" y="10" width="4" height="4" rx="1"/><rect x="3" y="17" width="4" height="4" rx="1"/><rect x="10" y="17" width="4" height="4" rx="1"/>'),
 };
 const CHECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path pathLength="1" d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 const LOGO = `<span class="logo">${CHECK}</span>`;
@@ -119,7 +121,8 @@ function cleanPlan(raw) {
   return plan;
 }
 
-const NAV = [['tracker', I.grid, 'Tracker'], ['today', I.target, 'Today'], ['profile', I.user, 'Profile'], ['settings', I.sliders, 'Personalize']];
+const NAV = [['tracker', I.grid, 'Tracker'], ['week', I.week, 'Week'], ['year', I.year, 'Year'], ['today', I.target, 'Today'],
+  ['profile', I.user, 'Profile'], ['settings', I.sliders, 'Personalize']];
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const DEFAULTS = {
@@ -130,7 +133,7 @@ const DEFAULTS = {
 const CHOICES = {
   theme: THEMES.map(t => t.id), font: ['system', 'rounded', 'serif', 'mono'], size: ['s', 'm', 'l'],
   density: ['compact', 'comfortable'], radius: ['sharp', 'rounded', 'round'], cb: ['square', 'circle'],
-  weekStart: [0, 1], startView: ['tracker', 'today'], motion: ['full', 'reduced', 'off'],
+  weekStart: [0, 1], startView: ['tracker', 'week', 'year', 'today'], motion: ['full', 'reduced', 'off'],
 };
 const LOOK_KEYS = ['theme', 'accent', 'font', 'size', 'density', 'radius', 'cb', 'motion'];
 
@@ -146,7 +149,8 @@ const BADGES = [
 ];
 
 /* ---------- state ---------- */
-const App = { user: null, data: null, view: 'tracker', y: 0, m: 0, tab: 'chart', flash: null, confirm: null, newBadges: new Set(), modalSeq: 0 };
+const App = { user: null, data: null, view: 'tracker', y: 0, m: 0, tab: 'chart', flash: null, confirm: null, newBadges: new Set(), modalSeq: 0,
+  weekOffset: 0, year: 0, yearHabit: null }; // week: 0 = this week, -1 = last week; yearHabit: one habit on the Year page, or all
 const AuthUI = { mode: null, pick: null, code: null, next: null, remember: true, reset: false, identity: null,
   quiz: null, plan: null, lastMode: null }; // quiz: {step, answers} while answering; plan: the answers, until signed up
 
@@ -162,6 +166,26 @@ function cleanSettings(raw) {
 const settings = () => ({ ...DEFAULTS, ...(App.data ? App.data.settings : {}) });
 const lookBeforeLogin = () => ({ ...DEFAULTS, ...cleanSettings(Store.read('look', {})) });
 const habitById = id => App.data.habits.find(h => h.id === id);
+
+/* Habits live in grids (like "Morning" or "Work"); every profile has at least one. The Tracker,
+   Week and Year pages show the current grid; Today and Profile show every habit. */
+const MAX_GRIDS = 20;
+const GRID_ICONS = ['✅', '🌅', '💼', '💪', '🧠', '🏠', '📚', '🌙', '🎯', '💰', '🎨', '❤️', '🌱', '⚡', '🧘', '🗂️'];
+function cleanGrids(d) {
+  const seen = new Set();
+  d.grids = (Array.isArray(d.grids) ? d.grids : []).slice(0, MAX_GRIDS)
+    .filter(g => g && typeof g.id === 'string' && /^[\w-]{1,24}$/.test(g.id) && !seen.has(g.id) && seen.add(g.id))
+    .map(g => ({ id: g.id, name: String(g.name || '').trim().slice(0, 30) || 'Grid', icon: String(g.icon || '').trim().slice(0, 8) || '✅' }));
+  if (!d.grids.length) d.grids.push({ id: 'main', name: 'My habits', icon: '✅' });
+  const ids = new Set(d.grids.map(g => g.id));
+  for (const h of d.habits) if (!ids.has(h.grid)) h.grid = d.grids[0].id; // habits from before grids join the first one
+  if (!ids.has(d.gridId)) d.gridId = d.grids[0].id;
+  return d;
+}
+const currentGrid = () => App.data.grids.find(g => g.id === App.data.gridId) || App.data.grids[0];
+const gridHabits = (g = currentGrid()) => App.data.habits.filter(h => h.grid === g.id);
+// The stats helpers in store.js only read data.habits and data.log, so one grid is a shallow view.
+const gridData = () => ({ ...App.data, habits: gridHabits() });
 
 function onColor(hex) {
   const n = parseInt(hex.slice(1), 16);
@@ -193,7 +217,7 @@ function loadData(id) {
   d.settings = cleanSettings(d.settings);
   d.badges = Array.isArray(d.badges) ? d.badges : [];
   d.plan = cleanPlan(d.plan);
-  return d;
+  return cleanGrids(d);
 }
 function save() {
   if (!Store.write('data.' + App.user.id, App.data)) toast('Could not save — browser storage is full');
@@ -509,6 +533,7 @@ function planInto(d, plan) {
   for (const [id, icon, name, color] of HABIT_CHOICES) {
     if (plan.habits.includes(id)) d.habits.push({ id: Habits.newId(), name, icon, color, created: key });
   }
+  cleanGrids(d); // puts them in the first grid
 }
 function applyPlan(plan) {
   if (!plan || !App.data) return;
@@ -576,8 +601,10 @@ function enterApp(user) {
   App.data = loadData(user.id);
   App.newBadges = new Set();
   const t = Dates.today();
-  App.y = t.getFullYear();
+  App.y = App.year = t.getFullYear();
   App.m = t.getMonth();
+  App.weekOffset = 0;
+  App.yearHabit = null;
   Object.assign(AuthUI, { mode: null, pick: null, code: null, next: null, reset: false, identity: null, quiz: null, plan: null, lastMode: null });
   applySettings();
   App.view = viewFromHash() || settings().startView;
@@ -605,9 +632,9 @@ function updateMe() {
   if (me) me.innerHTML = `<span class="avatar" style="--c:${u.color}">${esc(u.avatar)}</span><span class="me-txt"><b>${esc(u.displayName)}</b><small>${esc(Auth.label(u))}</small></span>`;
 }
 
-const VIEWS = { tracker: viewTracker, today: viewToday, profile: viewProfile, settings: viewSettings };
-const TITLES = { tracker: 'Tracker', today: 'Today', profile: 'Profile', settings: 'Personalize' };
-const AFTER = { tracker: scrollToToday, profile: animateCounts };
+const VIEWS = { tracker: viewTracker, week: viewWeek, year: viewYear, today: viewToday, profile: viewProfile, settings: viewSettings };
+const TITLES = { tracker: 'Tracker', week: 'Week', year: 'Year', today: 'Today', profile: 'Profile', settings: 'Personalize' };
+const AFTER = { tracker: scrollToToday, year: scrollToTodaySquare, profile: animateCounts };
 const viewFromHash = () => { const v = location.hash.replace(/^#\/?/, ''); return VIEWS[v] ? v : null; };
 
 function renderView(animate = true) {
@@ -640,15 +667,48 @@ window.addEventListener('hashchange', () => {
 
 /* ---------- tracker ---------- */
 function summaryText() {
-  const ds = Habits.dayStats(App.data, Dates.today());
+  const ds = Habits.dayStats(gridData(), Dates.today());
   const hi = `${greeting()}, ${esc(App.user.displayName)}`;
   return ds.total ? `${hi} · ${ds.done} of ${ds.total} done today` : `${hi}. Add a habit to get started.`;
 }
 
-const emptyState = () => `<section class="card empty"><div class="big-emoji">🌱</div><h2>Start your first habit</h2>
-  <p class="muted">Track anything you want to do daily. Tick a box each day and watch your charts fill in.</p>
+const emptyState = (title = 'Start your first habit', text = 'Track anything you want to do daily. Tick a box each day and watch your charts fill in.') =>
+  `<section class="card empty"><div class="big-emoji">🌱</div><h2>${title}</h2>
+  <p class="muted">${text}</p>
   <div class="row-btns center"><button class="btn primary" data-action="newHabit">${I.plus} New habit</button>
   <button class="btn" data-action="starter">✨ Add starter habits</button></div></section>`;
+// An empty grid when the profile has others: say so, so it doesn't look like habits were lost.
+const gridEmpty = () => (App.data.habits.length
+  ? emptyState(`${esc(currentGrid().name)} has no habits yet`, 'Add habits here, or move a habit into this grid from its Edit habit window.')
+  : emptyState());
+
+function gridBar() {
+  const cur = currentGrid();
+  return `<div class="grid-bar"><div class="grid-tabs" role="group" aria-label="Grids">${App.data.grids.map(g => {
+    const n = App.data.habits.filter(h => h.grid === g.id).length;
+    return `<button class="grid-tab" aria-pressed="${g === cur}" data-action="pickGrid" data-g="${g.id}" aria-label="${esc(g.name)}, ${n} habit${n === 1 ? '' : 's'}">`
+      + `<span aria-hidden="true">${esc(g.icon)}</span><span class="gt-name">${esc(g.name)}</span><small aria-hidden="true">${n}</small></button>`;
+  }).join('')}</div>
+    <button class="icon-btn" data-action="editGrid" title="Edit this grid" aria-label="Edit grid ${esc(cur.name)}">${I.edit}</button>
+    <button class="btn sm ghost" data-action="newGrid" aria-label="New grid">${I.plus}<span>New grid</span></button></div>`;
+}
+
+function gridModal(g) {
+  const isNew = !g, many = App.data.grids.length > 1;
+  g = g || { name: '', icon: GRID_ICONS[App.data.grids.length % GRID_ICONS.length] };
+  openModal(`<form data-form="grid" data-g="${isNew ? '' : g.id}">
+    <div class="modal-head"><h2>${isNew ? 'New grid' : 'Edit grid'}</h2>${closeBtn}</div>
+    ${isNew ? '<p class="muted">A grid is its own set of habits, like Morning, Work or Health. Switch grids with the tabs on the Tracker, Week and Year pages.</p><br>' : ''}
+    <label class="field"><span>Name</span><input class="input" name="name" maxlength="30" required value="${esc(g.name)}" placeholder="e.g. Morning routine" autofocus></label>
+    <div class="field"><span>Icon</span><div class="emoji-grid">${GRID_ICONS.map(e => `<button type="button" class="emo" aria-pressed="${e === g.icon}" data-action="pickEmoji" data-v="${e}">${e}</button>`).join('')}
+      <input class="emo-custom" name="icon" value="${esc(g.icon)}" maxlength="8" aria-label="Or type any emoji" title="Or type any emoji"></div></div>
+    ${!isNew && many ? `<div class="row-btns"><button type="button" class="btn ghost sm" data-action="moveGrid" data-g="${g.id}" data-d="-1">${I.left} Move left</button>
+      <button type="button" class="btn ghost sm" data-action="moveGrid" data-g="${g.id}" data-d="1">Move right ${I.right}</button></div>` : ''}
+    <p class="form-err" role="alert"></p>
+    <div class="modal-foot">${!isNew && many ? `<button type="button" class="btn ghost danger" data-action="deleteGrid" data-g="${g.id}">${I.trash} Delete</button>` : ''}
+      <span class="grow"></span><button type="button" class="btn ghost" data-action="closeModal">Cancel</button><button class="btn primary">${isNew ? 'Create grid' : 'Save'}</button></div>
+  </form>`);
+}
 
 const tabBtn = (id, icon, label) => `<button role="tab" aria-selected="${App.tab === id}" data-action="tab" data-t="${id}">${icon}<span>${label}</span></button>`;
 
@@ -663,15 +723,16 @@ function viewTracker() {
       <span class="month-title">${MONTHS[m]} ${y}</span>
       <button class="icon-btn" data-action="month" data-d="1" aria-label="Next month" ${isCur ? 'disabled' : ''}>${I.right}</button>
       <button class="btn sm primary" data-action="newHabit">${I.plus}<span>New habit</span></button>
-    </div></header>`;
-  if (!App.data.habits.length) return head + emptyState();
+    </div></header>` + gridBar();
+  const hs = gridHabits();
+  if (!hs.length) return head + gridEmpty();
 
   let cols = '';
   for (let d = 1; d <= n; d++) {
     const wd = new Date(y, m, d).getDay(), isT = isCur && d === today.getDate();
     cols += `<th class="day${isT ? ' today' : ''}${wd === 0 || wd === 6 ? ' we' : ''}" scope="col"${isT ? ' id="today-col"' : ''}><span>${WEEKDAYS[wd][0]}</span><b>${d}</b></th>`;
   }
-  const rows = App.data.habits.map(h => {
+  const rows = hs.map(h => {
     let cells = '';
     for (let d = 1; d <= n; d++) {
       const dt = new Date(y, m, d), isT = isCur && d === today.getDate();
@@ -698,12 +759,12 @@ function scrollToToday(view) {
 }
 
 function monthSummary(y, m) {
-  const today = Dates.today(), n = Dates.daysIn(y, m), days = [];
+  const today = Dates.today(), n = Dates.daysIn(y, m), days = [], data = gridData();
   for (let d = 1; d <= n; d++) {
     const dt = new Date(y, m, d);
-    days.push(dt > today ? { d, pct: null } : { d, ...Habits.dayStats(App.data, dt) });
+    days.push(dt > today ? { d, pct: null } : { d, ...Habits.dayStats(data, dt) });
   }
-  const habits = App.data.habits.map(h => ({ h, ...Habits.habitMonth(App.data, h, y, m), ...Habits.streaks(App.data, h) }));
+  const habits = data.habits.map(h => ({ h, ...Habits.habitMonth(data, h, y, m), ...Habits.streaks(data, h) }));
   const done = habits.reduce((a, x) => a + x.done, 0), possible = habits.reduce((a, x) => a + x.possible, 0);
   return { days, habits, done, possible, pct: possible ? done / possible : 0 };
 }
@@ -767,6 +828,206 @@ function refreshTracker() {
   $('#summary').innerHTML = summaryText();
 }
 
+/* ---------- week ---------- */
+function weekDays() {
+  const t = Dates.today(), back = (t.getDay() - settings().weekStart + 7) % 7 - 7 * App.weekOffset;
+  return Array.from({ length: 7 }, (_, i) => new Date(t.getFullYear(), t.getMonth(), t.getDate() - back + i));
+}
+const shortDate = d => `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
+
+// Per habit: done / possible days this week (a habit counts from the day it was created).
+function weekStats(days) {
+  const today = Dates.today(), data = gridData();
+  const rows = data.habits.map(h => {
+    let done = 0, possible = 0;
+    for (const d of days) {
+      if (d > today || Dates.key(d) < h.created) continue;
+      possible++;
+      if (Habits.isDone(data, h.id, d)) done++;
+    }
+    return { h, done, possible };
+  });
+  const perDay = days.map(d => (d > today ? null : Habits.dayStats(data, d)));
+  return { rows, perDay, done: rows.reduce((a, r) => a + r.done, 0), possible: rows.reduce((a, r) => a + r.possible, 0) };
+}
+const dayPct = s => (s && s.pct != null ? pct(s.pct) + '%' : '–');
+const weekTotal = ws => (ws.possible ? pct(ws.done / ws.possible) + '%' : '–');
+const weekSummary = ws => (ws.possible ? `${ws.done} of ${ws.possible} check-ins done · ${weekTotal(ws)}` : 'Nothing to track this week yet');
+
+function viewWeek() {
+  const days = weekDays(), today = Dates.today(), todayKey = Dates.key(today), s = settings();
+  const head = `<header class="page-head">
+    <div><h1>Week</h1><p class="muted" id="week-summary">${weekSummary(weekStats(days))}</p></div>
+    <div class="month-nav">
+      ${App.weekOffset ? '<button class="btn sm ghost" data-action="week" data-d="0">This week</button>' : ''}
+      <button class="icon-btn" data-action="week" data-d="-1" aria-label="Previous week">${I.left}</button>
+      <span class="month-title">${shortDate(days[0])} – ${shortDate(days[6])}, ${days[6].getFullYear()}</span>
+      <button class="icon-btn" data-action="week" data-d="1" aria-label="Next week" ${App.weekOffset >= 0 ? 'disabled' : ''}>${I.right}</button>
+      <button class="btn sm primary" data-action="newHabit">${I.plus}<span>New habit</span></button>
+    </div></header>` + gridBar();
+  if (!gridHabits().length) return head + gridEmpty();
+  const ws = weekStats(days);
+  const cols = days.map(d => {
+    const wd = d.getDay(), isT = Dates.key(d) === todayKey;
+    return `<th class="day${isT ? ' today' : ''}${wd === 0 || wd === 6 ? ' we' : ''}" scope="col"><span>${WEEKDAYS[wd].slice(0, 3)}</span><b>${d.getDate()}</b></th>`;
+  }).join('');
+  const rows = ws.rows.map(({ h, done, possible }) => `<tr data-h="${h.id}" style="${habitVars(h, s)}">
+      <th class="hcell" scope="row"><button class="habit-name" data-action="editHabit" data-h="${h.id}" title="Edit habit"><span class="hi">${esc(h.icon)}</span><span class="hn">${esc(h.name)}</span></button></th>
+      ${days.map(d => {
+        const k = Dates.key(d);
+        return `<td${k === todayKey ? ' class="today"' : ''}><button class="cb${k < h.created ? ' pre' : ''}" data-action="toggleItem" data-h="${h.id}" data-date="${k}" `
+          + `aria-pressed="${Habits.isDone(App.data, h.id, d)}" aria-label="${esc(h.name)}, ${WEEKDAYS[d.getDay()]} ${shortDate(d)}"${d > today ? ' disabled' : ''}>${CHECK}</button></td>`;
+      }).join('')}
+      <td class="pcell"><span class="wk-count">${done}/${possible}</span></td></tr>`).join('');
+  const foot = `<tr><th class="hcell" scope="row">Done</th>${ws.perDay.map((x, i) =>
+    `<td${Dates.key(days[i]) === todayKey ? ' class="today"' : ''}><span data-day="${i}">${dayPct(x)}</span></td>`).join('')}<td class="pcell"><b id="week-total">${weekTotal(ws)}</b></td></tr>`;
+  return head + `<div class="grid-wrap"><table class="grid week-grid"><thead><tr><th class="hcell" scope="col">Habit</th>${cols}<th class="pcell" scope="col">Week</th></tr></thead>
+    <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table></div>`;
+}
+
+function refreshWeek() {
+  if (App.view !== 'week' || !$('.week-grid')) return;
+  const ws = weekStats(weekDays());
+  for (const cb of $$('.week-grid .cb')) {
+    const h = habitById(cb.dataset.h);
+    if (!h) continue;
+    cb.setAttribute('aria-pressed', Habits.isDone(App.data, h.id, Dates.parse(cb.dataset.date)));
+    cb.classList.toggle('pre', cb.dataset.date < h.created);
+  }
+  for (const r of ws.rows) {
+    const el = $(`.week-grid tr[data-h="${r.h.id}"] .wk-count`);
+    if (el) el.textContent = `${r.done}/${r.possible}`;
+  }
+  ws.perDay.forEach((x, i) => { const el = $(`.week-grid [data-day="${i}"]`); if (el) el.textContent = dayPct(x); });
+  $('#week-total').textContent = weekTotal(ws);
+  $('#week-summary').textContent = weekSummary(ws);
+}
+
+/* ---------- year ---------- */
+// Every day of the year for the current grid (or one of its habits): how much was done,
+// plus totals. A day is "complete" when every habit that existed that day was done.
+function yearInfo() {
+  const y = App.year, today = Dates.today(), base = gridData();
+  const one = App.yearHabit ? base.habits.find(h => h.id === App.yearHabit) : null;
+  const data = one ? { ...base, habits: [one] } : base;
+  const days = [];
+  let checkins = 0, complete = 0, run = 0, best = 0;
+  for (let i = 0; ; i++) {
+    const dt = new Date(y, 0, 1 + i);
+    if (dt.getFullYear() !== y) break;
+    if (dt > today) { days.push({ dt, future: true }); continue; }
+    const s = Habits.dayStats(data, dt);
+    checkins += s.done;
+    if (s.total && s.done === s.total) { complete++; best = Math.max(best, ++run); } else run = 0;
+    days.push({ dt, ...s });
+  }
+  const months = [];
+  let done = 0, possible = 0;
+  for (let m = 0; m < 12 && new Date(y, m, 1) <= today; m++) {
+    const sums = data.habits.map(h => Habits.habitMonth(data, h, y, m));
+    const d = sums.reduce((a, x) => a + x.done, 0), p = sums.reduce((a, x) => a + x.possible, 0);
+    done += d; possible += p;
+    months.push({ m, pct: p ? d / p : 0, any: p > 0 });
+  }
+  return { one, days, checkins, complete, best, months, rate: possible ? done / possible : 0 };
+}
+
+function heatHTML(info) {
+  const ws = settings().weekStart, todayKey = Dates.key(Dates.today());
+  // The squares run down each week, one column per week, like a contributions graph.
+  const slots = Array(((info.days[0].dt.getDay() - ws) + 7) % 7).fill(null).concat(info.days);
+  while (slots.length % 7) slots.push(null);
+  const past = info.days.filter(x => !x.future);
+  const focusKey = past.length ? Dates.key(past[past.length - 1].dt) : '';
+  let html = '<span></span>' + Array.from({ length: 7 }, (_, i) => `<span class="hl">${i % 2 ? '' : WEEKDAYS[(i + ws) % 7].slice(0, 3)}</span>`).join('');
+  for (let w = 0; w < slots.length; w += 7) {
+    const week = slots.slice(w, w + 7), first = week.find(x => x && x.dt.getDate() === 1);
+    html += `<span class="ml">${first ? MONTHS[first.dt.getMonth()].slice(0, 3) : ''}</span>`;
+    for (const x of week) {
+      if (!x) { html += '<i class="yd off"></i>'; continue; }
+      if (x.future) { html += '<i class="yd future"></i>'; continue; }
+      const k = Dates.key(x.dt), label = `${WEEKDAYS[x.dt.getDay()]}, ${MONTHS[x.dt.getMonth()]} ${x.dt.getDate()}: `
+        + (x.total ? (info.one ? (x.done ? 'done' : 'not done') : `${x.done} of ${x.total} done`) : 'nothing to track');
+      html += `<button class="yd${k === todayKey ? ' today' : ''}" style="--mix:${x.total ? Math.round((x.done / x.total) * 85) : 0}%" data-action="day" data-date="${k}" `
+        + `tabindex="${k === focusKey ? 0 : -1}" aria-label="${label}" title="${label}"></button>`;
+    }
+  }
+  return `<div class="heat-wrap"><div class="heat" role="group" aria-label="Days of ${App.year}. Use the arrow keys to move between days."${info.one ? ` style="${habitVars(info.one)};--heat:var(--hc)"` : ''}>${html}</div></div>
+    <div class="heat-legend" aria-hidden="true">Less ${[0, 25, 50, 70, 85].map(m => `<i class="yd" style="--mix:${m}%"></i>`).join('')} More</div>`;
+}
+
+function yearBody() {
+  const info = yearInfo(), tile = (n, label) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`;
+  const color = info.one ? info.one.color : 'var(--accent)';
+  return `<div class="stats year-stats">${tile(info.checkins, 'Check-ins')}${tile(info.complete, info.one ? 'Days done' : 'Perfect days')}
+      ${tile(info.best, info.one ? 'Longest streak' : 'Longest perfect run')}${tile(pct(info.rate) + '%', 'Year rate')}</div>
+    ${heatHTML(info)}
+    <h3 class="sub">By month</h3>
+    <div class="bars">${info.months.map((x, i) => `<div class="bar-row" style="--i:${i}"><span class="bar-name">${MONTHS[x.m]}</span>
+      <span class="bar"><i style="width:${pct(x.pct)}%;background:${color}"></i></span><b>${x.any ? pct(x.pct) + '%' : '–'}</b></div>`).join('')}</div>`;
+}
+
+function viewYear() {
+  const today = Dates.today(), isCur = App.year >= today.getFullYear(), hs = gridHabits();
+  const first = App.data.habits.reduce((a, h) => Math.min(a, +h.created.slice(0, 4)), today.getFullYear());
+  if (App.yearHabit && !hs.some(h => h.id === App.yearHabit)) App.yearHabit = null;
+  const head = `<header class="page-head">
+    <div><h1>Year</h1><p class="muted">Every day of ${App.year} at a glance. Darker squares mean more habits done.</p></div>
+    <div class="month-nav">
+      ${isCur ? '' : '<button class="btn sm ghost" data-action="year" data-d="0">This year</button>'}
+      <button class="icon-btn" data-action="year" data-d="-1" aria-label="Previous year" ${App.year <= first ? 'disabled' : ''}>${I.left}</button>
+      <span class="month-title">${App.year}</span>
+      <button class="icon-btn" data-action="year" data-d="1" aria-label="Next year" ${isCur ? 'disabled' : ''}>${I.right}</button>
+    </div></header>` + gridBar();
+  if (!hs.length) return head + gridEmpty();
+  const chip = (id, label, on) => `<button class="chip" aria-pressed="${on}" data-action="yearHabit" data-h="${id}">${label}</button>`;
+  return head + `<section class="card">
+    <div class="chips" role="group" aria-label="Show">${chip('', 'All habits', !App.yearHabit)}${hs.map(h => chip(h.id, `${esc(h.icon)} ${esc(h.name)}`, h.id === App.yearHabit)).join('')}</div>
+    <div id="year-body">${yearBody()}</div></section>`;
+}
+
+// Rebuilt after every change, keeping the scroll position, the day with the tab stop and the
+// day to return focus to (the square that opened a day's window).
+function refreshYear() {
+  const body = App.view === 'year' && $('#year-body');
+  if (!body) return;
+  const wrap = $('.heat-wrap', body), left = wrap ? wrap.scrollLeft : 0;
+  const dayOf = el => (el && el.matches && el.matches('.heat .yd[data-date]') && body.contains(el) ? el.dataset.date : null);
+  const stop = dayOf($('.heat .yd[tabindex="0"]', body)), active = dayOf(document.activeElement), back = dayOf(App.lastFocus);
+  body.innerHTML = yearBody();
+  const cell = k => k && $(`.heat .yd[data-date="${k}"]`, body);
+  if ($('.heat-wrap', body)) $('.heat-wrap', body).scrollLeft = left;
+  if (cell(stop)) { for (const c of $$('.heat .yd[tabindex="0"]', body)) c.tabIndex = -1; cell(stop).tabIndex = 0; }
+  if (cell(back)) App.lastFocus = cell(back);
+  if (cell(active)) cell(active).focus();
+}
+
+// After a page re-render, put focus back on the same arrow button (or "previous" when that one
+// is gone or disabled), so keyboard users can keep pressing it.
+function refocusNav(action, d) {
+  const same = $(`[data-action="${action}"][data-d="${d}"]`);
+  const el = same && !same.disabled ? same : $(`[data-action="${action}"][data-d="-1"]`);
+  if (el) el.focus();
+}
+
+function scrollToTodaySquare(view) {
+  const wrap = $('.heat-wrap', view), cell = $('.yd.today', view);
+  if (wrap && cell && wrap.scrollWidth > wrap.clientWidth) wrap.scrollLeft = cell.offsetLeft - wrap.clientWidth / 2;
+}
+
+// Arrow keys move between days (one tab stop for the whole year).
+document.addEventListener('keydown', e => {
+  const cell = e.target.closest && e.target.closest('.heat .yd[data-date]');
+  const step = cell && { ArrowDown: 1, ArrowUp: -1, ArrowRight: 7, ArrowLeft: -7, Home: -Infinity, End: Infinity }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  const cells = $$('.heat .yd[data-date]'), i = cells.indexOf(cell);
+  const next = cells[Math.max(0, Math.min(cells.length - 1, i + step))];
+  cell.tabIndex = -1;
+  next.tabIndex = 0;
+  next.focus();
+});
+
 /* ---------- today / focus ---------- */
 const streakText = st => (st.current ? `🔥 ${st.current}-day streak` : st.best ? `Best streak: ${st.best} day${st.best > 1 ? 's' : ''}` : 'Start a streak today');
 
@@ -798,8 +1059,29 @@ function viewToday() {
       <div class="donut-ring">${Charts.ring(ds.pct || 0, { size: 132, stroke: 11 })}<div class="donut-txt"><b id="t-pct">${pct(ds.pct)}%</b><span id="t-count">${ds.done} of ${ds.total}</span></div></div>
       <div class="hero-text"><h2 id="t-msg">${todayMsg(ds)}</h2><p class="muted">${quote}</p></div>
     </section>
-    <ul class="focus-list" id="focus">${hs.map((h, i) => focusItem(h, t, i, s.hideDone)).join('')}</ul>
+    <ul class="focus-list" id="focus">${todayItems(t, s.hideDone)}</ul>
     <p class="muted center" id="all-done" ${s.hideDone && ds.done === ds.total ? '' : 'hidden'}>All done for today. Enjoy the rest of your day ✨</p>`;
+}
+
+// Today shows every grid's habits, under a heading per grid when there's more than one.
+function todayItems(t, hide) {
+  const groups = App.data.grids.length > 1;
+  let i = 0;
+  return App.data.grids.map(g => {
+    const list = gridHabits(g);
+    if (!list.length) return '';
+    const allHidden = hide && list.every(h => Habits.isDone(App.data, h.id, t));
+    return (groups ? `<li class="focus-group${allHidden ? ' gone' : ''}" style="--i:${i}"><span aria-hidden="true">${esc(g.icon)}</span>${esc(g.name)}</li>` : '')
+      + list.map(h => focusItem(h, t, i++, hide)).join('');
+  }).join('');
+}
+// With "Hide completed", a grid's heading goes once all of its habits are hidden.
+function syncGroupHeads() {
+  for (const head of $$('#focus .focus-group')) {
+    let li = head.nextElementSibling, any = false;
+    for (; li && !li.classList.contains('focus-group'); li = li.nextElementSibling) if (!li.classList.contains('gone')) any = true;
+    head.classList.toggle('gone', !any);
+  }
 }
 
 function refreshFocusItems() {
@@ -827,7 +1109,7 @@ function refreshToday() {
       setTimeout(() => {
         if (!$('.focus-item.done', li)) return;
         li.classList.add('vanish');
-        setTimeout(() => li.classList.add('gone'), delay ? 350 : 0);
+        setTimeout(() => { li.classList.add('gone'); syncGroupHeads(); }, delay ? 350 : 0);
       }, delay);
     }
   }
@@ -845,6 +1127,8 @@ function setDone(id, date, on) {
   save();
   refreshFocusItems();
   refreshTracker();
+  refreshWeek();
+  refreshYear();
   refreshToday();
   const after = Habits.dayStats(App.data, today);
   if (on && key === Dates.key(today) && after.total && after.done === after.total && before.done < before.total) {
@@ -857,7 +1141,7 @@ function setDone(id, date, on) {
 function openDay(key) {
   const date = Dates.parse(key);
   openModal(`<div class="modal-head"><h2>${WEEKDAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}</h2>${closeBtn}</div>
-    <ul class="focus-list one">${App.data.habits.map((h, i) => focusItem(h, date, i, false)).join('')}</ul>
+    <ul class="focus-list one">${gridHabits().map((h, i) => focusItem(h, date, i, false)).join('')}</ul>
     <div class="modal-foot"><span class="grow"></span><button class="btn primary" data-action="closeModal">Done</button></div>`);
 }
 
@@ -871,6 +1155,8 @@ function habitModal(h) {
     <div class="field"><span>Icon</span><div class="emoji-grid">${HABIT_ICONS.map(e => `<button type="button" class="emo" aria-pressed="${e === h.icon}" data-action="pickEmoji" data-v="${e}">${e}</button>`).join('')}
       <input class="emo-custom" name="icon" value="${esc(h.icon)}" maxlength="8" aria-label="Or type any emoji" title="Or type any emoji"></div></div>
     <div class="field"><span>Color</span>${colorRadios('color', h.color)}</div>
+    ${App.data.grids.length > 1 ? `<label class="field"><span>Grid</span><select class="input" name="grid">${App.data.grids.map(g =>
+      `<option value="${g.id}"${g.id === (h.grid || currentGrid().id) ? ' selected' : ''}>${esc(g.icon)} ${esc(g.name)}</option>`).join('')}</select></label>` : ''}
     ${isNew ? '' : `<div class="row-btns"><button type="button" class="btn ghost sm" data-action="moveHabit" data-h="${h.id}" data-d="-1">${I.up} Move up</button>
       <button type="button" class="btn ghost sm" data-action="moveHabit" data-h="${h.id}" data-d="1">${I.down} Move down</button></div>`}
     <p class="form-err" role="alert"></p>
@@ -974,14 +1260,15 @@ function sanitizeData(d) {
   const habits = d.habits.slice(0, 200)
     .filter(h => h && typeof h.id === 'string' && /^[\w-]{1,24}$/.test(h.id) && !seen.has(h.id) && seen.add(h.id))
     .map(h => ({ id: h.id, name: String(h.name || 'Habit').slice(0, 40), icon: String(h.icon || '✅').slice(0, 8),
-      color: pickColor(h.color), created: /^\d{4}-\d{2}-\d{2}$/.test(h.created) ? h.created : Dates.key(Dates.today()) }));
+      color: pickColor(h.color), created: /^\d{4}-\d{2}-\d{2}$/.test(h.created) ? h.created : Dates.key(Dates.today()),
+      grid: typeof h.grid === 'string' ? h.grid : '' }));
   const log = {};
   for (const [mk, row] of Object.entries(d.log || {})) {
     if (!/^\d{4}-\d{2}$/.test(mk) || !row || typeof row !== 'object') continue;
     for (const [id, mask] of Object.entries(row)) if (seen.has(id) && Number.isInteger(mask) && mask) (log[mk] ||= {})[id] = mask | 0;
   }
   const badges = Array.isArray(d.badges) ? d.badges.filter(b => BADGES.some(x => x.id === b)) : [];
-  return { v: 1, habits, log, settings: cleanSettings(d.settings), badges, plan: cleanPlan(d.plan) };
+  return cleanGrids({ v: 1, habits, log, settings: cleanSettings(d.settings), badges, plan: cleanPlan(d.plan), grids: d.grids, gridId: d.gridId });
 }
 
 async function importBackup() {
@@ -1042,8 +1329,8 @@ function viewSettings() {
     <section class="card"><h2>Behavior</h2>
       ${setRow('Animations', 'Reduced keeps fades but drops movement', seg('motion', [['full', 'Full'], ['reduced', 'Reduced'], ['off', 'Off']], s.motion))}
       ${setRow('Celebrate perfect days', 'Confetti when every habit is done', switchBtn('celebrate', s.celebrate, 'Celebrate perfect days'))}
-      ${setRow('Week starts on', 'Used by the calendar', seg('weekStart', [[1, 'Monday'], [0, 'Sunday']], s.weekStart))}
-      ${setRow('Open the app on', '', seg('startView', [['tracker', 'Tracker'], ['today', 'Today']], s.startView))}
+      ${setRow('Week starts on', 'Used by the calendar, Week and Year', seg('weekStart', [[1, 'Monday'], [0, 'Sunday']], s.weekStart))}
+      ${setRow('Open the app on', '', seg('startView', [['tracker', 'Tracker'], ['week', 'Week'], ['year', 'Year'], ['today', 'Today']], s.startView))}
     </section>
     <section class="card"><h2>Storage</h2><div id="storage">${storageHTML()}</div>
       <div class="row-btns"><button class="btn sm" data-action="cleanup">${I.broom} Clean up</button><button class="btn sm" data-action="exportData">${I.download} Export backup</button></div></section>
@@ -1211,6 +1498,62 @@ const ACTIONS = {
     $('#progress-body').innerHTML = progressHTML(settings().motion !== 'off');
   },
   day(el) { openDay(el.dataset.date); },
+  week(el) {
+    const d = +el.dataset.d;
+    App.weekOffset = d === 0 ? 0 : Math.min(0, App.weekOffset + d);
+    renderView(true);
+    refocusNav('week', el.dataset.d);
+  },
+  year(el) {
+    const d = +el.dataset.d, now = Dates.today().getFullYear();
+    App.year = d === 0 ? now : Math.min(now, App.year + d);
+    renderView(true);
+    refocusNav('year', el.dataset.d);
+  },
+  yearHabit(el) {
+    App.yearHabit = el.dataset.h || null;
+    for (const b of $$('.chips .chip')) b.setAttribute('aria-pressed', b === el);
+    refreshYear();
+  },
+
+  pickGrid(el) {
+    App.data.gridId = el.dataset.g;
+    App.yearHabit = null;
+    save();
+    renderView(false);
+    const tab = $(`.grid-tab[data-g="${el.dataset.g}"]`);
+    if (tab) tab.focus(); // keyboard users stay on the tabs
+  },
+  newGrid() { gridModal(null); },
+  editGrid() { gridModal(currentGrid()); },
+  moveGrid(el) {
+    const list = App.data.grids, i = list.findIndex(g => g.id === el.dataset.g), j = i + +el.dataset.d;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    save();
+    renderView(false);
+    toast(`Moved ${+el.dataset.d < 0 ? 'left' : 'right'}`);
+  },
+  async deleteGrid(el) {
+    const g = App.data.grids.find(x => x.id === el.dataset.g);
+    if (!g || App.data.grids.length < 2) return;
+    const form = el.closest('form'), typed = form && { id: g.id, name: form.elements.name.value, icon: form.elements.icon.value };
+    const hs = gridHabits(g), n = hs.length;
+    const ok = await confirmBox(`Delete “${g.name}”?`, n
+      ? `Its ${n} habit${n === 1 ? '' : 's'} and their history are deleted too. To keep a habit, move it to another grid first (Edit habit → Grid). This can't be undone.`
+      : 'This grid has no habits.', 'Delete');
+    if (!ok) { if (typed) gridModal(typed); return; } // back to Edit grid, with what was typed
+    App.data.habits = App.data.habits.filter(h => h.grid !== g.id);
+    for (const h of hs) Habits.purge(App.data, h.id);
+    App.data.grids = App.data.grids.filter(x => x !== g);
+    cleanGrids(App.data);
+    App.yearHabit = null;
+    save();
+    renderView(false);
+    const tab = $('.grid-tab[aria-pressed="true"]');
+    if (tab) tab.focus(); // the dialog's opener is gone; land on the grid that's now shown
+    toast('Grid deleted');
+  },
 
   newHabit() { habitModal(null); },
   editHabit(el) { habitModal(habitById(el.dataset.h)); },
@@ -1220,8 +1563,11 @@ const ACTIONS = {
     for (const b of $$('.emo', form)) b.setAttribute('aria-pressed', b === el);
   },
   moveHabit(el) {
-    const list = App.data.habits, i = list.findIndex(h => h.id === el.dataset.h), j = i + +el.dataset.d;
-    if (i < 0 || j < 0 || j >= list.length) return;
+    const list = App.data.habits, i = list.findIndex(h => h.id === el.dataset.h), d = +el.dataset.d;
+    if (i < 0) return;
+    let j = i + d; // the next habit in the same grid
+    while (j >= 0 && j < list.length && list[j].grid !== list[i].grid) j += d;
+    if (j < 0 || j >= list.length) return;
     [list[i], list[j]] = [list[j], list[i]];
     save();
     renderView(false);
@@ -1237,8 +1583,8 @@ const ACTIONS = {
     toast('Habit deleted');
   },
   starter() {
-    const key = Dates.key(Dates.today());
-    for (const [name, icon, color] of STARTERS) App.data.habits.push({ id: Habits.newId(), name, icon, color, created: key });
+    const key = Dates.key(Dates.today()), grid = currentGrid().id;
+    for (const [name, icon, color] of STARTERS) App.data.habits.push({ id: Habits.newId(), name, icon, color, created: key, grid });
     save();
     renderView(true);
     checkBadges();
@@ -1381,17 +1727,37 @@ const FORMS = {
     const name = String(fd.get('name') || '').trim().slice(0, 40);
     if (!name) throw new Error('Give your habit a name.');
     const icon = String(fd.get('icon') || '').trim().slice(0, 8) || '✅', color = pickColor(fd.get('color'));
-    const id = f.dataset.h;
-    if (id) Object.assign(habitById(id), { name, icon, color });
+    const grid = App.data.grids.find(g => g.id === fd.get('grid')) || currentGrid();
+    const id = f.dataset.h, h = id && habitById(id), moved = h && h.grid !== grid.id;
+    if (h) Object.assign(h, { name, icon, color, grid: grid.id });
     else {
       App.flash = Habits.newId();
-      App.data.habits.push({ id: App.flash, name, icon, color, created: Dates.key(Dates.today()) });
+      App.data.habits.push({ id: App.flash, name, icon, color, created: Dates.key(Dates.today()), grid: grid.id });
+      App.data.gridId = grid.id; // show the grid it went into
     }
     save();
     closeModal();
     renderView(false);
     checkBadges();
-    toast(id ? 'Habit updated' : `${icon} ${name} added`);
+    toast(moved ? `Moved to ${grid.icon} ${grid.name}` : h ? 'Habit updated' : `${icon} ${name} added`);
+  },
+  grid(f, fd) {
+    const name = String(fd.get('name') || '').trim().slice(0, 30);
+    if (!name) throw new Error('Give your grid a name.');
+    const icon = String(fd.get('icon') || '').trim().slice(0, 8) || '✅';
+    const g = App.data.grids.find(x => x.id === f.dataset.g);
+    if (g) Object.assign(g, { name, icon });
+    else {
+      if (App.data.grids.length >= MAX_GRIDS) throw new Error(`You can have up to ${MAX_GRIDS} grids.`);
+      const id = 'g' + Habits.newId().slice(1);
+      App.data.grids.push({ id, name, icon });
+      App.data.gridId = id;
+      App.yearHabit = null;
+    }
+    save();
+    closeModal();
+    renderView(!g);
+    toast(g ? 'Grid updated' : `${icon} ${name} created`);
   },
   async profile(f, fd) {
     const displayName = String(fd.get('displayName') || '').trim().slice(0, 30);

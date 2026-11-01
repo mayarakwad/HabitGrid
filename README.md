@@ -32,6 +32,11 @@ one-time "open anyway" step.
 
 **Tracking**
 - Monthly grid: one row per habit, one checkbox per day, today highlighted, past days can be backfilled.
+- **Multiple grids:** keep separate sets of habits (like Morning, Work or Health) and switch with tabs.
+  Rename, reorder or delete grids, and move a habit to another grid from Edit habit.
+- **Week** page: this week with big checkboxes, a done count per habit and a % per day; go back to earlier weeks.
+- **Year** page: every day of the year as a square (darker = more done), for the whole grid or one habit,
+  with check-ins, perfect days, the longest run and a bar per month. Arrow keys move between days.
 - Completion % and progress ring for each habit; month navigation.
 - **Monthly progress** with three views:
   - **Chart:** month-total donut, a smooth daily completion chart, and per-habit bars.
