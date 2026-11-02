@@ -1,6 +1,6 @@
 /* Offline support: network first (so updates show up right away), cache as the fallback. */
-const CACHE = 'habitgrid-v1';
-const FILES = ['./', './index.html', './css/style.css', './js/store.js', './js/auth.js', './js/charts.js', './js/app.js', './manifest.webmanifest', './icon.svg'];
+const CACHE = 'habitgrid-v2';
+const FILES = ['./', './index.html', './css/style.css', './js/store.js', './js/auth.js', './js/charts.js', './js/chat.js', './js/app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)));

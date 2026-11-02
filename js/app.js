@@ -351,6 +351,7 @@ function enterApp(user) {
   mountShell();
   renderView(true);
   checkBadges(true);
+  Chat.mount();
 }
 
 function mountShell() {
@@ -754,7 +755,7 @@ function storageHTML() {
   const used = Store.bytesUsed(), mine = Store.size('data.' + App.user.id), cap = 5 * 1048576;
   return `<div class="meter"><i style="width:${Math.max(0.5, (used / cap) * 100).toFixed(2)}%"></i></div>
     <p class="muted">Your data: <b>${fmtBytes(mine)}</b> · All profiles on this device: <b>${fmtBytes(used)}</b> of about 5 MB browser storage.
-    Check-ins are packed into bitmasks, and the whole app is about 120 KB (around 32 KB compressed) with no libraries, fonts or images.</p>`;
+    Check-ins are packed into bitmasks, and the whole app is about 180 KB (around 52 KB compressed) with no libraries, fonts or images.</p>`;
 }
 
 function viewSettings() {
@@ -780,6 +781,9 @@ function viewSettings() {
       ${setRow('Week starts on', 'Used by the calendar', seg('weekStart', [[1, 'Monday'], [0, 'Sunday']], s.weekStart))}
       ${setRow('Open the app on', '', seg('startView', [['tracker', 'Tracker'], ['today', 'Today']], s.startView))}
     </section>
+    <section class="card"><h2>Assistant</h2>
+      <p class="muted">Chat with HabitGrid to add and check habits, ask about your progress or change these settings. It works offline with built-in commands, or connect your own Claude or GPT API key.</p>
+      <div class="row-btns"><button class="btn sm" data-action="chatSettings">${I.sliders} Assistant settings</button></div></section>
     <section class="card"><h2>Storage</h2><div id="storage">${storageHTML()}</div>
       <div class="row-btns"><button class="btn sm" data-action="cleanup">${I.broom} Clean up</button><button class="btn sm" data-action="exportData">${I.download} Export backup</button></div></section>
     <div class="row-btns center"><button class="btn ghost" data-action="resetLook">Reset personalization</button></div>`;
@@ -835,6 +839,7 @@ const ACTIONS = {
   },
   logout() {
     Auth.logout();
+    Chat.unmount();
     App.user = App.data = null;
     closeModal(true);
     Object.assign(AuthUI, { mode: null, pick: null });
@@ -958,6 +963,7 @@ const ACTIONS = {
     closeModal();
     if (r) r(true);
   },
+  ...Chat.actions,
 };
 
 /* ---------- forms ---------- */
@@ -1020,6 +1026,7 @@ const FORMS = {
   async deleteAccount(f, fd) {
     if (!(await Auth.verify(App.user.id, fd.get('password')))) throw new Error('Wrong password.');
     const name = App.user.displayName;
+    Chat.unmount();
     Auth.remove(App.user.id);
     App.user = App.data = null;
     closeModal(true);
@@ -1028,6 +1035,7 @@ const FORMS = {
     renderAuth();
     toast(`Account “${name}” deleted`);
   },
+  ...Chat.forms,
 };
 
 /* ---------- events ---------- */
