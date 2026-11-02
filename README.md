@@ -19,6 +19,14 @@ profiles, themes and animations.
 - **Today** focus view: big tap targets, today's ring, streaks, and an optional "hide completed".
 - Starter habits, emoji icons, per-habit colors, reorder, edit and delete.
 
+**Assistant (chatbot)**
+- An **Ask** button opens a chat that can add, rename, recolor, reorder and delete habits, check or uncheck
+  any day ("I did exercise and read yesterday"), answer questions about progress and streaks, change themes
+  and settings, and switch pages.
+- **Built-in** mode understands short commands and works offline with no key. Type `help` to see them.
+- Connect **Claude** (Anthropic) or **GPT** (OpenAI) with your own API key to chat in plain language.
+  Step-by-step setup: [docs/AI-SETUP.md](docs/AI-SETUP.md).
+
 **Profiles**
 - Create account, sign in, sign out, and switch between several profiles on one device.
 - "Keep me signed in", show/hide password, password-strength meter, and a short lockout after 5 wrong tries.
@@ -40,7 +48,7 @@ profiles, themes and animations.
 
 ## Small on purpose
 
-- No frameworks, libraries, web fonts or images. The whole app is about 120 KB (around 32 KB gzipped).
+- No frameworks, libraries, web fonts or images. The whole app is about 180 KB (around 52 KB gzipped).
 - Check-ins are stored as one 31-bit mask per habit per month. A month of 6 habits plus the
   account is about 3 KB of browser storage.
 - "Clean up" in Personalize removes leftovers, and deleting a habit deletes its history.
@@ -48,7 +56,9 @@ profiles, themes and animations.
 
 ## Privacy & security
 
-Everything stays in your browser's `localStorage`. Nothing is sent to a server.
+Everything stays in your browser's `localStorage`. Nothing is sent to a server, unless you connect the
+Assistant to Claude or GPT. In that case your chat messages and the habit data the assistant needs go
+straight from your browser to the provider you picked, using your own API key (saved only in this browser).
 Passwords and recovery codes are salted and hashed with PBKDF2-SHA-256 (150,000 iterations, Web Crypto),
 and only the hashes are stored. Because accounts are local, they don't sync between devices.
 Use **Export backup** / **Import backup** to move your data.
@@ -71,7 +81,9 @@ css/style.css         themes (color tokens), layout, components, animations
 js/store.js           storage, dates, habit stats (bitmasks, streaks)
 js/auth.js            local accounts (PBKDF2), sessions, recovery codes
 js/charts.js          SVG ring and area chart
+js/chat.js            Assistant: chat panel, built-in commands, Claude/GPT tool calling
 js/app.js             UI: auth screens, tracker, today, profile, personalize
+docs/AI-SETUP.md      how to connect Claude or GPT to the Assistant
 sw.js                 offline cache
 manifest.webmanifest  install as an app
 ```
