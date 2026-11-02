@@ -612,6 +612,7 @@ function enterApp(user) {
   mountShell();
   renderView(true);
   checkBadges(true);
+  Chat.mount();
 }
 
 function mountShell() {
@@ -1337,6 +1338,9 @@ function viewSettings() {
       ${setRow('Week starts on', 'Used by the calendar, Week and Year', seg('weekStart', [[1, 'Monday'], [0, 'Sunday']], s.weekStart))}
       ${setRow('Open the app on', '', seg('startView', [['tracker', 'Tracker'], ['week', 'Week'], ['year', 'Year'], ['today', 'Today']], s.startView))}
     </section>
+    <section class="card"><h2>Assistant</h2>
+      <p class="muted">Chat with HabitGrid to add and check habits, manage grids, ask about your progress or change these settings. It works offline with built-in commands, or connect your own Claude or GPT API key.</p>
+      <div class="row-btns"><button class="btn sm" data-action="chatSettings">${I.sliders} Assistant settings</button></div></section>
     <section class="card"><h2>Storage</h2><div id="storage">${storageHTML()}</div>
       <div class="row-btns"><button class="btn sm" data-action="cleanup">${I.broom} Clean up</button><button class="btn sm" data-action="exportData">${I.download} Export backup</button></div></section>
     <div class="row-btns center"><button class="btn ghost" data-action="resetLook">Reset personalization</button></div>
@@ -1421,6 +1425,7 @@ const ACTIONS = {
   },
   logout() {
     Auth.logout();
+    Chat.unmount();
     App.user = App.data = null;
     closeModal(true);
     Object.assign(AuthUI, { mode: null, pick: null });
@@ -1672,6 +1677,7 @@ const ACTIONS = {
     closeModal();
     if (r) r(true);
   },
+  ...Chat.actions,
 };
 
 /* ---------- forms ---------- */
@@ -1796,6 +1802,7 @@ const FORMS = {
     renderView(false);
     toast('Google disconnected');
   },
+  ...Chat.forms,
 };
 
 function showRecoveryCode(code, title) {
@@ -1806,6 +1813,7 @@ function showRecoveryCode(code, title) {
 
 function deleteCurrentAccount() {
   const name = App.user.displayName;
+  Chat.unmount();
   Auth.remove(App.user.id);
   App.user = App.data = null;
   closeModal(true);

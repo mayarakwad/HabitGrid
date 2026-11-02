@@ -45,6 +45,14 @@ one-time "open anyway" step.
 - **Today** focus view: big tap targets, today's ring, streaks, and an optional "hide completed".
 - Starter habits, emoji icons, per-habit colors, reorder, edit and delete.
 
+**Assistant (chatbot)**
+- The **Ask** button (bottom right) opens a chat that can add, rename, recolor, reorder and delete habits
+  and grids, move habits between grids, check or uncheck any day ("I did exercise and read yesterday"),
+  answer questions about your month, week and streaks, change themes and settings, and open pages.
+- **Built-in** mode understands short commands and works offline with no key. Type `help` for the list.
+- Connect **Claude** (Anthropic) or **GPT** (OpenAI), or OpenRouter, with your own API key to chat in
+  plain language. Step-by-step setup: [docs/AI-SETUP.md](docs/AI-SETUP.md).
+
 **Personalization**
 - 9 themes: System, Midnight, Paper, Ocean, Forest, Dusk, Sand, Rose and OLED.
 - Accent color presets plus a custom color picker.
@@ -77,8 +85,15 @@ Passwords and recovery codes are salted and hashed with PBKDF2-SHA-256 (150,000 
 hashes are stored. Use **Export backup** / **Import backup** (Profile page) to move your data to
 another computer.
 
-HabitGrid only goes online when you use **Continue with Google**: your browser shows Google's sign-in
-page, and Google tells HabitGrid your name, email and a Google account ID. Nothing else is sent anywhere.
+HabitGrid only goes online when you use **Continue with Google** or connect the Assistant to an AI:
+
+- **Continue with Google:** your browser shows Google's sign-in page, and Google tells HabitGrid your name,
+  email and a Google account ID.
+- **Assistant with Claude or GPT:** your chat messages, your grid and habit names and the stats the
+  assistant looks up go straight to the provider you chose (Anthropic, OpenAI or your own endpoint), using
+  your own API key. The key is saved in `data.json` (never in backups). Built-in mode sends nothing.
+
+Nothing else is sent anywhere.
 Emails aren't verified by HabitGrid, and a forgotten password is reset with the recovery code, not by email.
 
 ## Turn on Google sign-in
@@ -152,7 +167,7 @@ python -m venv .venv
 ## Project layout
 
 ```
-main.py              desktop window, single-instance check, file dialogs, Google sign-in calls
+main.py              desktop window, single-instance check, file dialogs, Google sign-in, AI requests
 storage.py           the data file: atomic saves with a backup copy
 google_auth.py       Sign in with Google: system browser, loopback redirect, PKCE
 web/index.html       the interface
@@ -160,7 +175,9 @@ web/css/style.css    themes (color tokens), layout, components, animations
 web/js/store.js      data access: the app's file, or the browser for development
 web/js/auth.js       local accounts: email + password (PBKDF2), Google, recovery codes
 web/js/charts.js     SVG ring and area chart
+web/js/chat.js       Assistant: chat panel, built-in commands, Claude/GPT tool calling
 web/js/app.js        screens: sign-in, tracker, today, profile, personalize
+docs/AI-SETUP.md     how to connect Claude, GPT or OpenRouter to the Assistant
 tests/               unit tests and the end-to-end smoke test
 installer.iss        Windows setup wizard (Inno Setup)
 build.bat            Windows build      build_mac.sh   macOS build (app, .dmg, .zip)

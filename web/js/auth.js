@@ -243,6 +243,7 @@ const Auth = (() => {
     delete all[id];
     saveUsers(all);
     Store.remove('data.' + id);
+    Store.remove('ai.' + id); // assistant settings and API keys
     logout();
   }
 

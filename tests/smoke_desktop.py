@@ -476,7 +476,7 @@ def main():
                     "deleteCancelKeepsEdit": True, "streakConfetti": True,
                     "gridCreated": True, "newGridEmpty": True, "habitGoesToCurrentGrid": True, "switchGrid": True,
                     "moveHabitToGrid": True, "todayGroupsByGrid": True, "deleteGrid": True, "backupKeepsGrids": True,
-                    "version": "1.2.1"}
+                    "version": "1.2.2"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")

@@ -1,9 +1,11 @@
+import io
 import os
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -211,6 +213,68 @@ class MainTest(unittest.TestCase):
             backup.write_bytes('{"habits": []}'.encode("utf-16"))
             with self.assertRaisesRegex(ValueError, "isn't a HabitGrid backup"):
                 api.import_backup()
+
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body, status=200):
+        super().__init__(body)
+        self.status = status
+
+
+class AiRequestTest(unittest.TestCase):
+    """Api.ai_request: the Assistant's requests to an AI provider, sent from Python."""
+
+    def setUp(self):
+        self.api = main.Api(DataFile("."))
+
+    def test_posts_and_returns_status_and_text(self):
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b'{"ok": true}')) as urlopen:
+            r = self.api.ai_request("post", "https://api.anthropic.com/v1/messages", {"x-api-key": "k"}, '{"a": 1}')
+        self.assertEqual(r, {"status": 200, "text": '{"ok": true}'})
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.data, b'{"a": 1}')
+        self.assertEqual(request.get_header("X-api-key"), "k")
+        self.assertTrue(request.get_header("User-agent").startswith("HabitGrid/"))
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], main.AI_TIMEOUT)
+
+    def test_get_sends_no_body(self):
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b"{}")) as urlopen:
+            self.api.ai_request("GET", "https://api.openai.com/v1/models/gpt-5", {"authorization": "Bearer k"}, None)
+        self.assertIsNone(urlopen.call_args.args[0].data)
+        self.assertEqual(urlopen.call_args.args[0].get_method(), "GET")
+
+    def test_error_status_is_returned_not_raised(self):
+        err = urllib.error.HTTPError("https://api.anthropic.com/v1/messages", 401, "Unauthorized", {},
+                                     io.BytesIO(b'{"error": {"message": "invalid x-api-key"}}'))
+        with mock.patch("urllib.request.urlopen", side_effect=err):
+            r = self.api.ai_request("POST", "https://api.anthropic.com/v1/messages", {}, "{}")
+        self.assertEqual(r["status"], 401)
+        self.assertIn("invalid x-api-key", r["text"])
+
+    def test_network_failure_raises_connection_error(self):
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no route")):
+            with self.assertRaisesRegex(ConnectionError, "no route"):
+                self.api.ai_request("POST", "https://api.anthropic.com/v1/messages", {}, "{}")
+
+    def test_only_https_or_this_computer(self):
+        for url in ("http://example.com/v1", "file:///etc/passwd", "ftp://x/y", "https:///nohost", "javascript:alert(1)"):
+            with self.subTest(url=url), mock.patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaises(ValueError):
+                    self.api.ai_request("POST", url, {}, "{}")
+                urlopen.assert_not_called()
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b"{}")):
+            self.assertEqual(self.api.ai_request("POST", "http://localhost:8787/v1", {}, "{}")["status"], 200)
+
+    def test_only_get_and_post(self):
+        with self.assertRaises(ValueError):
+            self.api.ai_request("DELETE", "https://api.openai.com/v1/files/x", {}, None)
+
+    def test_huge_reply_is_refused(self):
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse(b"x" * (main.MAX_AI_BYTES + 1))):
+            with self.assertRaisesRegex(ValueError, "too large"):
+                self.api.ai_request("POST", "https://api.anthropic.com/v1/messages", {}, "{}")
 
 
 if __name__ == "__main__":

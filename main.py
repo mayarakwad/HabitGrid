@@ -3,6 +3,9 @@ import hashlib
 import os
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import webview
@@ -11,7 +14,7 @@ import google_auth
 from storage import DataFile
 
 APP = "HabitGrid"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 # Bundled files live next to this script, or in PyInstaller's unpack folder.
 BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
@@ -25,6 +28,9 @@ BACKGROUNDS = {
     "dusk": "#1a1120", "sand": "#f5f0e6", "rose": "#fff4f6", "oled": "#000000",
 }
 MAX_IMPORT_BYTES = 2_000_000
+# The Assistant's requests to an AI provider (see Api.ai_request).
+AI_TIMEOUT = 180  # seconds: a model that thinks before answering can take a while
+MAX_AI_BYTES = 4_000_000
 _instance_mutex = None  # held for the life of the process
 _running_mutex = None  # likewise; the installer checks it (AppMutex in installer.iss)
 
@@ -231,6 +237,35 @@ class Api:
         except Exception:
             pass
 
+    def ai_request(self, method, url, headers=None, body=None):
+        """Sends one request for the Assistant (web/js/chat.js) to Anthropic, OpenAI or the
+        endpoint the user set, and returns {status, text}. An error status is returned, not
+        raised, so the page can explain it; a network failure raises.
+
+        Going through here instead of the page's fetch avoids the web view's cross-origin
+        rules for a page opened from a file. Only https (or http on this computer) is allowed.
+        """
+        method = str(method).upper()
+        if method not in ("GET", "POST"):
+            raise ValueError("Only GET and POST requests are supported.")
+        url = str(url)
+        parts = urllib.parse.urlsplit(url)
+        local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
+        if not (parts.scheme == "https" and parts.hostname) and not local:
+            raise ValueError("The Assistant only connects to https:// addresses.")
+        sent = {str(k): str(v) for k, v in (headers or {}).items()}
+        sent.setdefault("User-Agent", f"{APP}/{VERSION}")
+        data = None if body is None else str(body).encode("utf-8")
+        request = urllib.request.Request(url, data=data, headers=sent, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=AI_TIMEOUT, context=google_auth._ssl_context()) as res:
+                return {"status": res.status, "text": _read_text(res)}
+        except urllib.error.HTTPError as err:
+            return {"status": err.code, "text": _read_text(err)}
+        except (urllib.error.URLError, OSError) as err:
+            reason = getattr(err, "reason", err)
+            raise ConnectionError(f"Couldn't connect: {reason}") from None
+
     def export_backup(self, filename, text):
         """Asks where to save a backup and writes it. Returns the path, or None if cancelled."""
         chosen = self._window.create_file_dialog(
@@ -254,6 +289,13 @@ class Api:
             return path.read_text(encoding="utf-8-sig")  # also accepts a byte order mark
         except UnicodeDecodeError:
             raise ValueError("That file isn't a HabitGrid backup.") from None
+
+
+def _read_text(response):
+    raw = response.read(MAX_AI_BYTES + 1)
+    if len(raw) > MAX_AI_BYTES:
+        raise ValueError("The AI provider's reply was too large.")
+    return raw.decode("utf-8", "replace")
 
 
 def create_main_window(folder, **window_options):
