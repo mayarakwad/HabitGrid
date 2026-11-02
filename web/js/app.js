@@ -240,13 +240,13 @@ function replay(el, cls) {
   el.classList.add(cls);
 }
 
-function celebrate() {
+function celebrate(big = false) {
   const s = App.data ? settings() : lookBeforeLogin(); // before sign-in, the motion setting comes from the saved look
   if (!s.celebrate || s.motion !== 'full') return;
   const box = document.createElement('div');
   box.className = 'confetti';
   const colors = [s.accent, '#f5c542', '#30a46c', '#d6409f', '#0090ff', '#f76b15'];
-  for (let i = 0; i < 36; i++) {
+  for (let i = 0; i < (big ? 90 : 36); i++) {
     const p = document.createElement('i');
     p.style.cssText = `--x:${Math.random() * 100}vw;--dx:${(Math.random() - 0.5) * 220}px;--r:${Math.random() * 900 - 450}deg;`
       + `--d:${(1 + Math.random()).toFixed(2)}s;--delay:${(Math.random() * 0.3).toFixed(2)}s;background:${colors[i % colors.length]}`;
@@ -1117,11 +1117,13 @@ function refreshToday() {
 }
 
 /* ---------- day editing ---------- */
+const STREAK_MILESTONES = [7, 14, 21, 30, 50, 100, 150, 200, 365];
+
 function setDone(id, date, on) {
   const h = habitById(id);
   if (!h) return;
   const today = Dates.today(), before = Habits.dayStats(App.data, today);
-  const key = Dates.key(date);
+  const key = Dates.key(date), streakBefore = Habits.streaks(App.data, h).current;
   if (on && key < h.created) h.created = key; // backfilling extends the habit's start
   Habits.setDone(App.data, id, date, on);
   save();
@@ -1131,10 +1133,13 @@ function setDone(id, date, on) {
   refreshYear();
   refreshToday();
   const after = Habits.dayStats(App.data, today);
-  if (on && key === Dates.key(today) && after.total && after.done === after.total && before.done < before.total) {
-    celebrate();
-    toast('Perfect day! Every habit done 🎉');
-  }
+  const perfect = on && key === Dates.key(today) && after.total && after.done === after.total && before.done < before.total;
+  // A tick that grows the habit's current streak to 2+ days gets confetti; milestones get more.
+  const streak = on ? Habits.streaks(App.data, h).current : 0, streakUp = streak >= 2 && streak > streakBefore;
+  const milestone = streakUp && STREAK_MILESTONES.includes(streak);
+  if (streakUp || perfect) celebrate(milestone || perfect);
+  if (streakUp) toast(milestone ? `🏆 ${streak}-day streak on ${h.name}! Keep it going` : `🔥 ${streak}-day streak: ${h.name}`);
+  if (perfect) toast('Perfect day! Every habit done 🎉');
   checkBadges();
 }
 
@@ -1328,7 +1333,7 @@ function viewSettings() {
     </section>
     <section class="card"><h2>Behavior</h2>
       ${setRow('Animations', 'Reduced keeps fades but drops movement', seg('motion', [['full', 'Full'], ['reduced', 'Reduced'], ['off', 'Off']], s.motion))}
-      ${setRow('Celebrate perfect days', 'Confetti when every habit is done', switchBtn('celebrate', s.celebrate, 'Celebrate perfect days'))}
+      ${setRow('Confetti', 'For streaks and perfect days (needs Animations set to Full)', switchBtn('celebrate', s.celebrate, 'Confetti for streaks and perfect days'))}
       ${setRow('Week starts on', 'Used by the calendar, Week and Year', seg('weekStart', [[1, 'Monday'], [0, 'Sunday']], s.weekStart))}
       ${setRow('Open the app on', '', seg('startView', [['tracker', 'Tracker'], ['week', 'Week'], ['year', 'Year'], ['today', 'Today']], s.startView))}
     </section>

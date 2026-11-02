@@ -273,6 +273,26 @@ window.__smoke = null;
   const kept = sanitizeData({ habits: [{ id: 'a1', name: 'A', grid: 'w1' }, { id: 'a2', name: 'B', grid: 'nope' }], log: {},
     grids: [{ id: 'm1', name: 'M' }, { id: 'w1', name: 'W', icon: '💼' }, { id: 'bad id!', name: 'X' }], gridId: 'w1' });
   const lost = sanitizeData({ habits: [{ id: 'a1', name: 'A', grid: 'w1' }], log: {}, grids: 'junk' });
+  // Confetti when a tick grows a streak (2+ days), bigger at milestones; not for a first day or an untick.
+  const realCelebrate = celebrate, calls = [];
+  celebrate = big => calls.push(!!big);
+  const ago = n => new Date(today.getFullYear(), today.getMonth(), today.getDate() - n);
+  const runner = { id: Habits.newId(), name: 'Streak test', icon: '🔥', color: '#e5484d', created: Dates.key(ago(10)), grid: App.data.grids[0].id };
+  const fresh = { id: Habits.newId(), name: 'Fresh', icon: '🌱', color: '#30a46c', created: todayKey, grid: App.data.grids[0].id };
+  App.data.habits.push(runner, fresh);
+  for (let i = 6; i >= 2; i--) Habits.setDone(App.data, runner.id, ago(i), true); // done 6..2 days ago
+  setDone(runner.id, ago(1), true);  // yesterday: 6-day streak
+  const six = calls.slice();
+  setDone(runner.id, today, true);   // today: 7, a milestone
+  const seven = calls.slice(six.length);
+  setDone(runner.id, today, false);  // untick: nothing
+  setDone(fresh.id, today, true);    // first day: nothing
+  const toasts = $$('.toast').map(t => t.textContent).join(' | ');
+  r.streakConfetti = six.length === 1 && six[0] === false && seven.length === 1 && seven[0] === true
+    && calls.length === 2 && toasts.includes('6-day streak: Streak test') && toasts.includes('7-day streak on Streak test') || { calls, toasts };
+  celebrate = realCelebrate;
+  for (const h of [runner, fresh]) { App.data.habits = App.data.habits.filter(x => x !== h); Habits.purge(App.data, h.id); }
+  save();
   r.backupKeepsGrids = kept.grids.length === 2 && kept.gridId === 'w1' && kept.habits[0].grid === 'w1' && kept.habits[1].grid === 'm1'
     && lost.grids.length === 1 && lost.habits[0].grid === lost.grids[0].id;
   ACTIONS.logout();
@@ -453,10 +473,10 @@ def main():
                     "profileShowsPlan": True, "newProfileAsksQuestionsFirst": True, "abandonedPlanDropped": True,
                     "oldHabitsInFirstGrid": True, "weekShowsHabits": True, "weekTicks": True, "weekGoesBack": True,
                     "yearHasEveryDay": True, "yearChips": True, "yearOneHabit": True, "yearArrowKeys": True, "yearKeepsPlace": True,
-                    "deleteCancelKeepsEdit": True,
+                    "deleteCancelKeepsEdit": True, "streakConfetti": True,
                     "gridCreated": True, "newGridEmpty": True, "habitGoesToCurrentGrid": True, "switchGrid": True,
                     "moveHabitToGrid": True, "todayGroupsByGrid": True, "deleteGrid": True, "backupKeepsGrids": True,
-                    "version": "1.2.0"}
+                    "version": "1.2.1"}
         for key, value in expected.items():
             if second.get(key) != value:
                 failures.append(f"second run {key} = {second.get(key)!r}, expected {value!r}")
